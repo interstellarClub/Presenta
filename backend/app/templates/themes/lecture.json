@@ -1,0 +1,52 @@
+{
+  "id": "lecture",
+  "name": "教学课件",
+  "version": 1,
+  "fonts": { "version": "1", "stack": ["Inter", "Source Sans 3", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "sans-serif"] },
+  "tokens": {
+    "color": {
+      "bg": "#FFFDF5",
+      "surface": "#FFFFFF",
+      "text": "#23252B",
+      "muted": "#5A6072",
+      "primary": "#1D6F42",
+      "accent": "#8A6000",
+      "border": "#E6E0CF",
+      "onPrimary": "#FFFFFF"
+    },
+    "font": {
+      "display": "Inter, Noto Sans SC, PingFang SC, sans-serif",
+      "body": "Inter, Source Sans 3, Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif",
+      "mono": "JetBrains Mono, SFMono-Regular, Consolas, monospace"
+    },
+    "space": { "1": "4px", "2": "8px", "3": "12px", "4": "16px", "5": "24px" },
+    "radius": { "sm": "8px", "md": "16px", "lg": "24px" },
+    "shadow": { "sm": "0 1px 3px rgba(35,37,43,0.08)", "md": "0 10px 30px rgba(35,37,43,0.10)" },
+    "cssVariables": {
+      "--color-bg": "#FFFDF5",
+      "--color-surface": "#FFFFFF",
+      "--color-text": "#23252B",
+      "--color-muted": "#5A6072",
+      "--color-primary": "#1D6F42",
+      "--color-accent": "#8A6000",
+      "--color-border": "#E6E0CF",
+      "--color-on-primary": "#FFFFFF",
+      "--font-display": "Inter, Noto Sans SC, PingFang SC, sans-serif",
+      "--font-body": "Inter, Source Sans 3, Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif",
+      "--font-mono": "JetBrains Mono, SFMono-Regular, Consolas, monospace",
+      "--size-1": "18px",
+      "--size-2": "24px",
+      "--size-3": "34px",
+      "--size-4": "48px",
+      "--size-5": "72px",
+      "--radius-sm": "8px",
+      "--radius-md": "16px",
+      "--radius-lg": "24px",
+      "--shadow-sm": "0 1px 3px rgba(35,37,43,0.08)",
+      "--shadow-md": "0 10px 30px rgba(35,37,43,0.10)"
+    }
+  },
+  "layouts": ["cover", "toc", "bullets", "split-lr", "split-tb", "cards-3", "chart", "big-number", "quote", "compare", "timeline", "process", "full-image", "ending"],
+  "motionCapabilities": ["fade", "push", "wipe", "slide"],
+  "typography": { "scale": 1.05, "lineHeightBody": 1.7, "lineHeightCJK": 1.8, "lineHeightHeading": 1.25 }
+}

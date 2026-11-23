@@ -1,0 +1,52 @@
+{
+  "id": "tech",
+  "name": "技术分享",
+  "version": 1,
+  "fonts": { "version": "1", "stack": ["Inter", "Source Sans 3", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "sans-serif"] },
+  "tokens": {
+    "color": {
+      "bg": "#0E1116",
+      "surface": "#161B22",
+      "text": "#E6EDF3",
+      "muted": "#8B949E",
+      "primary": "#58A6FF",
+      "accent": "#3FB950",
+      "border": "#30363D",
+      "onPrimary": "#0E1116"
+    },
+    "font": {
+      "display": "Inter, Noto Sans SC, PingFang SC, sans-serif",
+      "body": "Inter, Source Sans 3, Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif",
+      "mono": "JetBrains Mono, SFMono-Regular, Consolas, monospace"
+    },
+    "space": { "1": "4px", "2": "8px", "3": "12px", "4": "16px", "5": "24px" },
+    "radius": { "sm": "6px", "md": "10px", "lg": "16px" },
+    "shadow": { "sm": "0 1px 0 rgba(255,255,255,0.04)", "md": "0 12px 32px rgba(0,0,0,0.4)" },
+    "cssVariables": {
+      "--color-bg": "#0E1116",
+      "--color-surface": "#161B22",
+      "--color-text": "#E6EDF3",
+      "--color-muted": "#8B949E",
+      "--color-primary": "#58A6FF",
+      "--color-accent": "#3FB950",
+      "--color-border": "#30363D",
+      "--color-on-primary": "#0E1116",
+      "--font-display": "Inter, Noto Sans SC, PingFang SC, sans-serif",
+      "--font-body": "Inter, Source Sans 3, Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif",
+      "--font-mono": "JetBrains Mono, SFMono-Regular, Consolas, monospace",
+      "--size-1": "15px",
+      "--size-2": "20px",
+      "--size-3": "30px",
+      "--size-4": "44px",
+      "--size-5": "72px",
+      "--radius-sm": "6px",
+      "--radius-md": "10px",
+      "--radius-lg": "16px",
+      "--shadow-sm": "0 1px 0 rgba(255,255,255,0.04)",
+      "--shadow-md": "0 12px 32px rgba(0,0,0,0.4)"
+    }
+  },
+  "layouts": ["cover", "toc", "bullets", "split-lr", "split-tb", "cards-3", "chart", "big-number", "quote", "compare", "timeline", "process", "full-image", "ending"],
+  "motionCapabilities": ["fade", "wipe", "slide"],
+  "typography": { "scale": 1.0, "lineHeightBody": 1.65, "lineHeightCJK": 1.72, "lineHeightHeading": 1.2 }
+}

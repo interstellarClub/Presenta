@@ -1,0 +1,125 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  render-svc:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.render
+    environment:
+      RENDER_SVC_TOKEN: ${RENDER_SVC_TOKEN:-dev-render-token}
+    ports:
+      - "8100:8100"
+    shm_size: "1gb"
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
+      INVITE_HMAC_SALT: ${INVITE_HMAC_SALT:-dev-invite-salt}
+      DATABASE_URL: postgresql+asyncpg://app:app@postgres:5432/app
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_BACKEND: arq
+      STORAGE_BACKEND: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: presenta
+      S3_KEY: minioadmin
+      S3_SECRET: minioadmin
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      RENDER_SVC_URL: http://render-svc:8100
+      RENDER_SVC_TOKEN: ${RENDER_SVC_TOKEN:-dev-render-token}
+      WEB_ORIGIN: http://localhost:5173
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    volumes:
+      - ../backend:/app
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: ["arq", "app.workers.arq_settings.WorkerSettings"]
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
+      INVITE_HMAC_SALT: ${INVITE_HMAC_SALT:-dev-invite-salt}
+      DATABASE_URL: postgresql+asyncpg://app:app@postgres:5432/app
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_BACKEND: arq
+      STORAGE_BACKEND: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: presenta
+      S3_KEY: minioadmin
+      S3_SECRET: minioadmin
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      RENDER_SVC_URL: http://render-svc:8100
+      RENDER_SVC_TOKEN: ${RENDER_SVC_TOKEN:-dev-render-token}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ../backend:/app
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.web
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

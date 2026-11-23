@@ -37,6 +37,28 @@
 
 **当前阶段：M1**（文档 → 完整 deck 静态呈现）。动效、导出、分享、模板包尚未实现，接口与 Schema 已预留字段。
 
+> **仓库实现状态（与本 README 的排期不完全同步，以此表为准）**
+>
+> 已实现：
+> - 账号与准入：邮箱密码 + 邀请码注册、会话 Cookie、邀请码 CLI（生成 / 吊销 / 查询用量）
+> - 文档：`.docx` / `.md` 上传、归一化 Markdown、字符级章节锚点、资产抽取（图片 / 表格；OMML 经 pandoc，失败降级并标注）
+> - 大纲：SSE 分阶段推送（摘要 → 规划 → 逐项），确认后才创建 Deck
+> - 逐页生成：`mock` / `deepseek` 双 provider，Pydantic 校验 + 修复 ≤2 + 失败降级纯文本页（`degraded`），任务状态含 `partial`
+> - 编辑：14 种版式渲染于 iframe 沙箱，点击选中插槽，JSON Patch 提交，`styleOverride` 覆盖层，乐观刷新
+> - 版本：Patch 链 + 每 20 版锚点 + 里程碑；列表 / 按 seq 回放 / 回滚
+> - 主题：6 套内置 Token + WCAG 对照报告；切主题只换 Token
+> - 导出：独立 HTML（资源内联）、PDF / GIF / PPTX（服务端 `render-svc`；未启动 render-svc 时明确报错，不静默降级）
+> - 分享：密码 + 有效期 + 下载格式白名单 + 访问日志 + 吊销；访客只读播放
+> - 清理：过期导出物 / 回收站 Deck / 过期分享 / 30 日访问日志（`app.cli.cleanup` 或 arq cron）
+> - 观测：`usage_ledger` 逐次计量、`audit_logs` 关键动作（永不删除）
+>
+> 尚未实现（相关 UI/接口要么显式拒绝，要么保留字段）：
+> - MP4 客户端 WebCodecs 逐帧编码（导出面板明确提示暂不可用）
+> - 用户模板包上传与七项校验器
+> - 自然语言指令编辑（M6）
+> - 动效组件库与真实 `seek(t)` 时间轴（保存 `transition` / `anim` / `steps` 字段，播放器按步进与转场元数据呈现）
+> - 字体子集分发与字形覆盖校验（当前导出使用系统字体；生产需接入统一字体包）
+
 ---
 
 ## 二、系统架构一览
@@ -129,6 +151,27 @@ open http://localhost:5173
 ---
 
 ## 五、本地开发（不用 Docker）
+
+### 最简模式（SQLite + 本地队列 + mock 模型，零外部依赖）
+
+```bash
+cp .env.example .env                  # LLM_PROVIDER=mock / QUEUE_BACKEND=local / STORAGE_BACKEND=local
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+alembic upgrade head                  # 或直接启动，dev 模式会自动建表
+python -m app.cli.invite create --label dev --uses 5
+uvicorn app.main:app --reload --port 8000
+
+# 另一个终端
+cd web && npm install && npm run dev  # http://localhost:5173
+```
+
+- `mock` 提供确定性大纲 / 页面（不联网），并在 `usage_ledger` 中标记 provider=mock。要接真实模型：`LLM_PROVIDER=deepseek` 且填写 `DEEPSEEK_API_KEY`（仅服务端）。
+- PDF / GIF / PPTX 需要 `render-svc`：`cd render_svc && pip install -r requirements.txt && playwright install chromium && uvicorn app:app --port 8100`。未启动时导出接口会返回明确错误。
+- 端到端冒烟脚本：`cd backend && PYTHONPATH=. python scripts/smoke_pipeline.py`（注册 → 解析 → 大纲 → 生成 → 四种导出 → 分享）。
+
+### 完整模式（本机 PostgreSQL / Redis / MinIO / pandoc）
 
 需要本机准备：**Python 3.12+、Node 20+、PostgreSQL 16、Redis 7、pandoc**。
 渲染服务（PDF/GIF/PPTX）需要 Chromium + FFmpeg，建议即使前端后端本地跑，`render-svc` 也用容器启动。

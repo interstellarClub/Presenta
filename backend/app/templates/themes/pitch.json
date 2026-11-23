@@ -1,0 +1,52 @@
+{
+  "id": "pitch",
+  "name": "商业路演",
+  "version": 1,
+  "fonts": { "version": "1", "stack": ["Inter", "Source Sans 3", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "sans-serif"] },
+  "tokens": {
+    "color": {
+      "bg": "#0B1020",
+      "surface": "#141B30",
+      "text": "#F5F7FF",
+      "muted": "#9AA3BD",
+      "primary": "#FF5A36",
+      "accent": "#3DD6C4",
+      "border": "#26304A",
+      "onPrimary": "#0B1020"
+    },
+    "font": {
+      "display": "Inter, Noto Sans SC, PingFang SC, sans-serif",
+      "body": "Inter, Source Sans 3, Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif",
+      "mono": "JetBrains Mono, SFMono-Regular, Consolas, monospace"
+    },
+    "space": { "1": "4px", "2": "8px", "3": "12px", "4": "16px", "5": "24px" },
+    "radius": { "sm": "6px", "md": "14px", "lg": "22px" },
+    "shadow": { "sm": "0 1px 2px rgba(0,0,0,0.35)", "md": "0 16px 40px rgba(0,0,0,0.45)" },
+    "cssVariables": {
+      "--color-bg": "#0B1020",
+      "--color-surface": "#141B30",
+      "--color-text": "#F5F7FF",
+      "--color-muted": "#9AA3BD",
+      "--color-primary": "#FF5A36",
+      "--color-accent": "#3DD6C4",
+      "--color-border": "#26304A",
+      "--color-on-primary": "#0B1020",
+      "--font-display": "Inter, Noto Sans SC, PingFang SC, sans-serif",
+      "--font-body": "Inter, Source Sans 3, Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif",
+      "--font-mono": "JetBrains Mono, SFMono-Regular, Consolas, monospace",
+      "--size-1": "16px",
+      "--size-2": "22px",
+      "--size-3": "32px",
+      "--size-4": "48px",
+      "--size-5": "80px",
+      "--radius-sm": "6px",
+      "--radius-md": "14px",
+      "--radius-lg": "22px",
+      "--shadow-sm": "0 1px 2px rgba(0,0,0,0.35)",
+      "--shadow-md": "0 16px 40px rgba(0,0,0,0.45)"
+    }
+  },
+  "layouts": ["cover", "toc", "bullets", "split-lr", "split-tb", "cards-3", "chart", "big-number", "quote", "compare", "timeline", "process", "full-image", "ending"],
+  "motionCapabilities": ["fade", "push", "wipe", "slide", "zoom", "dissolve"],
+  "typography": { "scale": 1.08, "lineHeightBody": 1.6, "lineHeightCJK": 1.7, "lineHeightHeading": 1.15 }
+}

@@ -1,14 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import SlideFrame from "@/canvas/SlideFrame";
-import type { SlideSelection } from "@/canvas/SlideFrame";
+import type { SlideDragSelection, SlideSelection } from "@/canvas/SlideFrame";
 import Inspector from "@/components/Inspector";
 import JobProgress from "@/components/JobProgress";
 import ExportPanel from "@/components/ExportPanel";
 import VersionTimeline from "@/components/VersionTimeline";
-import { api, ApiError } from "@/lib/api";
-import type { DeckPayload, DeckResponse, GenerateResponse, ThemeManifest } from "@/types";
+import { api, ApiError, uploadThemePack } from "@/lib/api";
+import type {
+  AssetSummary,
+  DeckPayload,
+  DeckResponse,
+  DocumentDetail,
+  GenerateResponse,
+  ThemeManifest,
+} from "@/types";
 
 export default function StudioPage() {
   const { deckId = "" } = useParams();
@@ -23,6 +30,8 @@ export default function StudioPage() {
   const [showVersions, setShowVersions] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [motionDraft, setMotionDraft] = useState(0);
+  const [assets, setAssets] = useState<AssetSummary[]>([]);
+  const themeInput = useRef<HTMLInputElement>(null);
 
   const deck: DeckPayload | null = response?.deck ?? null;
   const slide = deck?.slides[index] ?? null;
@@ -55,6 +64,16 @@ export default function StudioPage() {
   }, [loadDeck]);
 
   useEffect(() => {
+    if (!documentId) {
+      setAssets([]);
+      return;
+    }
+    void api<DocumentDetail>(`/documents/${documentId}`)
+      .then((detail) => setAssets(detail.assets))
+      .catch(() => setAssets([]));
+  }, [documentId]);
+
+  useEffect(() => {
     setSelection(null);
   }, [index]);
 
@@ -64,7 +83,11 @@ export default function StudioPage() {
     try {
       const data = await api<DeckResponse>(`/decks/${deckId}`, {
         method: "PATCH",
-        body: JSON.stringify({ operations, kind: "autosave" }),
+        body: JSON.stringify({
+          operations,
+          kind: "autosave",
+          expectedSeq: response?.versionSeq ?? 0,
+        }),
       });
       setResponse(data);
       setMotionDraft(data.deck.motionLevel);
@@ -74,6 +97,45 @@ export default function StudioPage() {
     } finally {
       setPending(false);
     }
+  };
+
+  const moveSlot = (selection: SlideDragSelection) => {
+    if (!deck) return;
+    const targetSlideIndex = deck.slides.findIndex(
+      (entry) => entry.id === selection.slideId,
+    );
+    if (targetSlideIndex < 0) return;
+    const targetSlide = deck.slides[targetSlideIndex];
+    const elementIndex = targetSlide.elements.findIndex(
+      (element) => element.slotPath === selection.slotPath,
+    );
+    const layout = selection.layout;
+    const operations =
+      elementIndex >= 0
+        ? [
+            {
+              op: "replace",
+              path: `/slides/${targetSlideIndex}/elements/${elementIndex}/layout`,
+              value: layout,
+            },
+          ]
+        : [
+            {
+              op: "add",
+              path: `/slides/${targetSlideIndex}/elements/-`,
+              value: {
+                id: `el-${Date.now().toString(36)}`,
+                type: "text",
+                slotPath: selection.slotPath,
+                layout,
+                styleOverride: {},
+                anim: [],
+                component: null,
+                provenance: null,
+              },
+            },
+          ];
+    void patch(operations).then(() => setSelection(selection));
   };
 
   const generate = async () => {
@@ -99,6 +161,27 @@ export default function StudioPage() {
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "主题切换失败");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const loadThemes = useCallback(async () => {
+    try {
+      setThemes(await api<ThemeManifest[]>("/themes"));
+    } catch {
+      setThemes([]);
+    }
+  }, []);
+
+  const uploadTheme = async (file: File) => {
+    setPending(true);
+    setError(null);
+    try {
+      await uploadThemePack(file, file.name.replace(/\.zip$/i, ""));
+      await loadThemes();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "模板包上传失败");
     } finally {
       setPending(false);
     }
@@ -137,6 +220,25 @@ export default function StudioPage() {
               </option>
             ))}
           </select>
+          <input
+            ref={themeInput}
+            type="file"
+            accept=".zip"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void uploadTheme(file);
+              event.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className="ghost small"
+            disabled={pending}
+            onClick={() => themeInput.current?.click()}
+          >
+            上传主题包
+          </button>
 
           <label className="progress-line" style={{ minWidth: 190 }}>
             <span className="muted small">动效</span>
@@ -190,6 +292,7 @@ export default function StudioPage() {
                 slide={entry}
                 theme={theme}
                 documentId={documentId}
+              motionLevel={deck.motionLevel}
                 interactive={false}
                 compact
                 title={`thumb-${entryIndex}`}
@@ -217,6 +320,7 @@ export default function StudioPage() {
               slide={slide}
               theme={theme}
               documentId={documentId}
+              motionLevel={deck.motionLevel}
               selectedSlot={selection?.slotPath ?? null}
               onSelect={(next) => {
                 setSelection(next);
@@ -225,6 +329,7 @@ export default function StudioPage() {
                   return target >= 0 ? target : current;
                 });
               }}
+              onDrag={moveSlot}
             />
             <div className="slide-caption">
               <span>
@@ -255,12 +360,15 @@ export default function StudioPage() {
         </div>
 
         <Inspector
+          deckId={deckId}
+          expectedSeq={response?.versionSeq ?? 0}
           deck={deck}
           slide={slide}
           slideIndex={index}
           selectedSlot={selection?.slotPath ?? null}
           theme={theme}
           documentId={documentId}
+          assets={assets}
           onPatch={(operations) => patch(operations)}
         />
 

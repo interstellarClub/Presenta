@@ -29,6 +29,9 @@ class GifRequest(RenderRequest):
     fps: int = 15
     seconds: float = 8
     maxWidth: int = 1280
+    frameTimes: list[float] | None = None
+    slideSteps: list[list[str]] | None = None
+    darkTheme: bool = False
 
 
 class PngRequest(RenderRequest):
@@ -161,28 +164,70 @@ async def render_gif(payload: GifRequest, x_render_token: str | None = Header(de
     fps = max(1, min(30, int(payload.fps)))
     seconds = max(0.5, min(30.0, float(payload.seconds)))
     notes = ["GIF 为 256 色调色板，粒子与半透明会被简化"]
-    if _is_dark_theme(payload.themeCss):
+    if payload.darkTheme or _is_dark_theme(payload.themeCss):
         notes.append("深色主题已按浅底渲染以缓解 GIF 色带")
+    if payload.slideSteps and any(payload.slideSteps):
+        notes.append("GIF 已按 fragment 步进逐帧渲染；连续组件动画仍会降级为静态片段")
 
     playwright, browser = await _launch()
     shots: list[bytes] = []
     try:
         page = await _open_page(browser)
-        for markup in payload.slides:
+        total_frames = len(payload.frameTimes or [])
+        if total_frames <= 0:
+            total_frames = max(1, int(round(fps * seconds)))
+        slide_count = max(1, len(payload.slides))
+        for slide_index, markup in enumerate(payload.slides):
             await page.set_content(_wrap_html([markup], payload.themeCss), wait_until="load")
-            shots.append(await page.screenshot(type="png"))
+            if payload.darkTheme or _is_dark_theme(payload.themeCss):
+                await page.add_style_tag(
+                    content="""
+                    :root {
+                      --color-bg: #ffffff;
+                      --color-surface: #f7f7f7;
+                      --color-text: #17171b;
+                      --color-muted: #52525b;
+                    }
+                    html, body, .page { background: #ffffff !important; }
+                    """
+                )
+            start = (slide_index * total_frames) // slide_count
+            end = ((slide_index + 1) * total_frames) // slide_count
+            frame_count = max(1, end - start)
+            steps = (
+                payload.slideSteps[slide_index]
+                if payload.slideSteps and slide_index < len(payload.slideSteps)
+                else []
+            )
+            for local_index in range(frame_count):
+                visible = (
+                    None
+                    if not steps
+                    else min(
+                        len(steps),
+                        ((local_index + 1) * len(steps) + frame_count - 1) // frame_count,
+                    )
+                )
+                await page.evaluate(
+                    """visible => {
+                      document.querySelectorAll('[data-fragment]').forEach((node, index) => {
+                        node.style.opacity = visible === null || index < visible ? '1' : '0';
+                        node.style.transition = 'none';
+                      });
+                    }""",
+                    visible,
+                )
+                shots.append(await page.screenshot(type="png"))
     finally:
         await browser.close()
         await playwright.stop()
 
-    per_slide_frames = max(1, int(round(fps * seconds / max(1, len(shots)))))
     with tempfile.TemporaryDirectory(prefix="presenta-gif-") as tmp:
         directory = Path(tmp)
         index = 0
         for shot in shots:
-            for _ in range(per_slide_frames):
-                (directory / f"frame_{index:06d}.png").write_bytes(shot)
-                index += 1
+            (directory / f"frame_{index:06d}.png").write_bytes(shot)
+            index += 1
         output = directory / "out.gif"
         scale = f"scale='min({int(payload.maxWidth)},iw)':-1:flags=lanczos"
         command = [

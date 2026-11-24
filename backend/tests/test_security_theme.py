@@ -1,3 +1,10 @@
+import io
+import json
+import zipfile
+
+import pytest
+from httpx import AsyncClient
+
 from app.core.security import (
     hash_password,
     invite_code_hash,
@@ -46,3 +53,28 @@ def test_builtin_themes_pass_contrast_and_manifest_rules() -> None:
 def test_contrast_ratio_extremes() -> None:
     assert contrast_ratio("#000000", "#FFFFFF") > 20
     assert contrast_ratio("#FFFFFF", "#FFFFFF") == 1.0
+
+
+async def test_theme_pack_upload(
+    client: AsyncClient,
+    invited_user: dict,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from app.api.routers import themes as themes_router
+
+    monkeypatch.setattr(themes_router, "_MANIFEST_DIR", tmp_path)
+    manifest = load_all_builtin()[0]
+    manifest["name"] = "自定义验收主题"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
+        archive.writestr("tokens.css", ":root { --color-primary: #1F4E79; }")
+    response = await client.post(
+        "/api/themes",
+        files={"file": ("theme.zip", buffer.getvalue(), "application/zip")},
+        data={"name": "自定义验收主题"},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["name"] == "自定义验收主题"
+    assert response.json()["id"].startswith("custom-")

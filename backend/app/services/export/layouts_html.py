@@ -1,13 +1,62 @@
 import html
+import re
 from typing import Any
 
-from app.api.schemas.deck import ImageMedia, Slide
+from app.api.schemas.deck import Element, ImageMedia, Slide
 
 _PALETTE = ["#7A1F1F", "#1F4E79", "#6b6a5f", "#3f6b55", "#9a6a2f", "#5d5f7a"]
 
 
 def esc(value: Any) -> str:
     return html.escape(str(value) if value is not None else "", quote=True)
+
+
+_CJK_RUN = re.compile(r"([\u3400-\u9fff\u3000-\u303f]+)")
+_RICH_TOKEN = re.compile(r"(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*|\^[^^]+\^)")
+
+
+def _cjk_html(raw: str) -> str:
+    parts = [part for part in _CJK_RUN.split(raw) if part]
+    rendered: list[str] = []
+    for index, part in enumerate(parts):
+        is_cjk = bool(re.search(r"[\u3400-\u9fff]", part))
+        previous = parts[index - 1] if index > 0 else ""
+        following = parts[index + 1] if index + 1 < len(parts) else ""
+        needs_gap = (
+            not is_cjk
+            and bool(re.search(r"[A-Za-z0-9]", part))
+            and (
+                bool(re.search(r"[\u3400-\u9fff]", previous))
+                or bool(re.search(r"[\u3400-\u9fff]", following))
+            )
+        )
+        escaped = esc(part)
+        gap = "\u200b" if needs_gap else ""
+        rendered.append(
+            f'<span class="cjk-compensate">{escaped}</span>'
+            if is_cjk
+            else f"{gap}{escaped}{gap}"
+        )
+    return "".join(rendered)
+
+
+def text_html(value: Any) -> str:
+    raw = str(value) if value is not None else ""
+    rendered: list[str] = []
+    for token in _RICH_TOKEN.split(raw):
+        if not token:
+            continue
+        if token.startswith("**") and token.endswith("**"):
+            rendered.append(f"<strong>{_cjk_html(token[2:-2])}</strong>")
+        elif token.startswith("`") and token.endswith("`"):
+            rendered.append(f"<code>{_cjk_html(token[1:-1])}</code>")
+        elif token.startswith("*") and token.endswith("*"):
+            rendered.append(f"<em>{_cjk_html(token[1:-1])}</em>")
+        elif token.startswith("^") and token.endswith("^"):
+            rendered.append(f"<sup>{_cjk_html(token[1:-1])}</sup>")
+        else:
+            rendered.append(_cjk_html(token))
+    return "".join(rendered)
 
 
 def _media(media: dict[str, Any], images: dict[str, str]) -> str:
@@ -149,7 +198,7 @@ def _text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
-def render_slide_html(slide: Slide, images: dict[str, str] | None = None) -> str:
+def _render_layout_html(slide: Slide, images: dict[str, str] | None = None) -> str:
     images = images or {}
     slots = slide.slots
     layout = slide.layout
@@ -168,20 +217,20 @@ def render_slide_html(slide: Slide, images: dict[str, str] | None = None) -> str
             bg_html = f'<img class="cover-bg" src="{images[background["assetId"]]}" alt="" />'
         inner = (
             f'<div class="cover-inner">'
-            f'<span class="kicker">{esc(slots.get("kicker", ""))}</span>'
-            f'<h1 class="cover-title">{esc(slots.get("title", ""))}</h1>'
-            f'<p class="cover-subtitle">{esc(slots.get("subtitle", ""))}</p>'
+            f'<span class="kicker">{text_html(slots.get("kicker", ""))}</span>'
+            f'<h1 class="cover-title">{text_html(slots.get("title", ""))}</h1>'
+            f'<p class="cover-subtitle">{text_html(slots.get("subtitle", ""))}</p>'
             "</div>"
         )
         return f'<div class="layout cover">{bg_html}{inner}<div class="cover-rule"></div>{degraded}</div>'
 
     if layout == "toc":
         toc_items = "".join(
-            f'<li><span class="toc-index">{index + 1:02d}</span><span>{esc(item)}</span></li>'
+            f'<li><span class="toc-index">{index + 1:02d}</span><span>{text_html(item)}</span></li>'
             for index, item in enumerate(_list(slots.get("items")))
         )
         return (
-            f'<div class="layout padded"><h2 class="section-title">{esc(slots.get("title", ""))}</h2>'
+            f'<div class="layout padded"><h2 class="section-title">{text_html(slots.get("title", ""))}</h2>'
             f'<ol class="toc-list">{toc_items}</ol>{degraded}</div>'
         )
 
@@ -192,14 +241,14 @@ def render_slide_html(slide: Slide, images: dict[str, str] | None = None) -> str
                 main, sub = _text(item.get("text")), _text(item.get("sub"))
             else:
                 main, sub = _text(item), ""
-            sub_html = f'<span class="bullet-sub">{esc(sub)}</span>' if sub else ""
+            sub_html = f'<span class="bullet-sub">{text_html(sub)}</span>' if sub else ""
             bullet_items.append(
                 '<li data-fragment><span class="bullet-mark"></span>'
-                f'<span class="bullet-body"><span class="bullet-main">{esc(main)}</span>{sub_html}</span></li>'
+                f'<span class="bullet-body"><span class="bullet-main">{text_html(main)}</span>{sub_html}</span></li>'
             )
-        lead = f'<p class="lead">{esc(slots.get("lead", ""))}</p>' if slots.get("lead") else ""
+        lead = f'<p class="lead">{text_html(slots.get("lead", ""))}</p>' if slots.get("lead") else ""
         return (
-            f'<div class="layout padded"><h2 class="section-title">{esc(slots.get("title", ""))}</h2>'
+            f'<div class="layout padded"><h2 class="section-title">{text_html(slots.get("title", ""))}</h2>'
             f'{lead}<div class="bullets"><ul>{"".join(bullet_items)}</ul></div>{degraded}</div>'
         )
 
@@ -208,21 +257,21 @@ def render_slide_html(slide: Slide, images: dict[str, str] | None = None) -> str
         container = "split-lr" if layout == "split-lr" else "split-tb"
         side = " media-left" if layout == "split-lr" and slots.get("mediaSide") == "left" else ""
         return (
-            f'<div class="layout padded"><h2 class="section-title">{esc(slots.get("title", ""))}</h2>'
-            f'<div class="{container}{side}"><div class="body-text">{esc(slots.get("body", ""))}</div>'
+            f'<div class="layout padded"><h2 class="section-title">{text_html(slots.get("title", ""))}</h2>'
+            f'<div class="{container}{side}"><div class="body-text">{text_html(slots.get("body", ""))}</div>'
             f"{media_html}</div>{degraded}{source_note}</div>"
         )
 
     if layout == "cards-3":
         cards = "".join(
             f'<div class="card"><span class="card-index">{index + 1:02d}</span>'
-            f'<h3>{esc((card or {}).get("heading", ""))}</h3>'
-            f'<p>{esc((card or {}).get("text", ""))}</p></div>'
+            f'<h3>{text_html((card or {}).get("heading", ""))}</h3>'
+            f'<p>{text_html((card or {}).get("text", ""))}</p></div>'
             for index, card in enumerate(_list(slots.get("cards")))
             if isinstance(card, dict)
         )
         return (
-            f'<div class="layout padded"><h2 class="section-title">{esc(slots.get("title", ""))}</h2>'
+            f'<div class="layout padded"><h2 class="section-title">{text_html(slots.get("title", ""))}</h2>'
             f'<div class="cards">{cards}</div>{degraded}</div>'
         )
 
@@ -231,67 +280,67 @@ def render_slide_html(slide: Slide, images: dict[str, str] | None = None) -> str
             f'<div class="layout padded"><h2 class="section-title">{esc(slots.get("title", ""))}</h2>'
             f'<div class="chart-wrap">{chart_svg(slots.get("chart") or {})}'
             f'<div class="chart-caption"><span>{esc(slots.get("caption", ""))}</span>'
-            f'<span class="source-line">{esc(slots.get("source", ""))}</span></div></div>'
+            f'<span class="source-line">{text_html(slots.get("source", ""))}</span></div></div>'
             f"{degraded}</div>"
         )
 
     if layout == "big-number":
         numbers = "".join(
-            f'<div class="number-block"><span class="number-value">{esc((entry or {}).get("value", ""))}</span>'
-            f'<span class="number-label">{esc((entry or {}).get("label", ""))}</span></div>'
+            f'<div class="number-block"><span class="number-value">{text_html((entry or {}).get("value", ""))}</span>'
+            f'<span class="number-label">{text_html((entry or {}).get("label", ""))}</span></div>'
             for entry in _list(slots.get("numbers"))
             if isinstance(entry, dict)
         )
-        note = f'<p class="note-line">{esc(slots.get("note", ""))}</p>' if slots.get("note") else ""
+        note = f'<p class="note-line">{text_html(slots.get("note", ""))}</p>' if slots.get("note") else ""
         return (
-            f'<div class="layout padded"><h2 class="section-title">{esc(slots.get("title", ""))}</h2>'
+            f'<div class="layout padded"><h2 class="section-title">{text_html(slots.get("title", ""))}</h2>'
             f'<div class="numbers">{numbers}</div>{note}{degraded}{source_note}</div>'
         )
 
     if layout == "quote":
         return (
             f'<div class="layout quote-layout"><span class="quote-mark">“</span>'
-            f'<blockquote class="quote-text">{esc(slots.get("quote", ""))}</blockquote>'
-            f'<div class="quote-meta"><span>{esc(slots.get("author", ""))}</span>'
-            f'<span class="source-line">{esc(slots.get("source", ""))}</span></div>{degraded}</div>'
+            f'<blockquote class="quote-text">{text_html(slots.get("quote", ""))}</blockquote>'
+            f'<div class="quote-meta"><span>{text_html(slots.get("author", ""))}</span>'
+            f'<span class="source-line">{text_html(slots.get("source", ""))}</span></div>{degraded}</div>'
         )
 
     if layout == "compare":
         columns = []
         for side, tag in (("left", "A"), ("right", "B")):
-            items = "".join(f"<li>{esc(item)}</li>" for item in _list(slots.get(side)))
+            items = "".join(f"<li>{text_html(item)}</li>" for item in _list(slots.get(side)))
             columns.append(
                 f'<div class="compare-col {side}"><span class="compare-tag">{tag}</span>'
                 f"<ul>{items}</ul></div>"
             )
         return (
-            f'<div class="layout padded"><h2 class="section-title">{esc(slots.get("title", ""))}</h2>'
+            f'<div class="layout padded"><h2 class="section-title">{text_html(slots.get("title", ""))}</h2>'
             f'<div class="compare">{"".join(columns)}</div>{degraded}</div>'
         )
 
     if layout == "timeline":
         nodes = "".join(
-            f'<div class="timeline-node"><span class="timeline-time">{esc((node or {}).get("time", ""))}</span>'
+            f'<div class="timeline-node"><span class="timeline-time">{text_html((node or {}).get("time", ""))}</span>'
             f'<span class="timeline-dot"></span>'
-            f'<span class="timeline-text">{esc((node or {}).get("text", ""))}</span></div>'
+            f'<span class="timeline-text">{text_html((node or {}).get("text", ""))}</span></div>'
             for node in _list(slots.get("nodes"))
             if isinstance(node, dict)
         )
         return (
-            f'<div class="layout padded"><h2 class="section-title">{esc(slots.get("title", ""))}</h2>'
+            f'<div class="layout padded"><h2 class="section-title">{text_html(slots.get("title", ""))}</h2>'
             f'<div class="timeline">{nodes}</div>{degraded}</div>'
         )
 
     if layout == "process":
         steps = "".join(
             f'<div class="process-step"><span class="process-index">{index + 1}</span>'
-            f'<h3>{esc((step or {}).get("label", ""))}</h3>'
-            f'<p>{esc((step or {}).get("text", ""))}</p></div>'
+            f'<h3>{text_html((step or {}).get("label", ""))}</h3>'
+            f'<p>{text_html((step or {}).get("text", ""))}</p></div>'
             for index, step in enumerate(_list(slots.get("steps")))
             if isinstance(step, dict)
         )
         return (
-            f'<div class="layout padded"><h2 class="section-title">{esc(slots.get("title", ""))}</h2>'
+            f'<div class="layout padded"><h2 class="section-title">{text_html(slots.get("title", ""))}</h2>'
             f'<div class="process">{steps}</div>{degraded}</div>'
         )
 
@@ -299,15 +348,15 @@ def render_slide_html(slide: Slide, images: dict[str, str] | None = None) -> str
         return (
             f'<div class="layout full-image"><div class="full-image-media">'
             f'{_media(slots.get("media") or {}, images)}</div>'
-            f'<div class="full-image-meta"><span>{esc(slots.get("caption", ""))}</span>'
-            f'<span class="source-line">{esc(slots.get("source", ""))}</span></div>{degraded}</div>'
+            f'<div class="full-image-meta"><span>{text_html(slots.get("caption", ""))}</span>'
+            f'<span class="source-line">{text_html(slots.get("source", ""))}</span></div>{degraded}</div>'
         )
 
     if layout == "ending":
         return (
-            f'<div class="layout ending"><h2 class="ending-title">{esc(slots.get("title", ""))}</h2>'
-            f'<p class="ending-message">{esc(slots.get("message", ""))}</p>'
-            f'<span class="ending-contact">{esc(slots.get("contact", ""))}</span>{degraded}</div>'
+            f'<div class="layout ending"><h2 class="ending-title">{text_html(slots.get("title", ""))}</h2>'
+            f'<p class="ending-message">{text_html(slots.get("message", ""))}</p>'
+            f'<span class="ending-contact">{text_html(slots.get("contact", ""))}</span>{degraded}</div>'
         )
 
     return (
@@ -316,9 +365,124 @@ def render_slide_html(slide: Slide, images: dict[str, str] | None = None) -> str
     )
 
 
+def _camel_to_kebab(name: str) -> str:
+    out: list[str] = []
+    for ch in name:
+        if ch.isupper():
+            out.append("-")
+            out.append(ch.lower())
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _style_string(override: dict[str, str | int | float]) -> str:
+    return ";".join(
+        f"{_camel_to_kebab(k)}:{esc(v)}" for k, v in override.items()
+    )
+
+
+def _slot_style_rules(elements: list[Element], slide_id: str) -> str:
+    rules: list[str] = []
+    for element in elements:
+        if not element.style_override and element.layout is None:
+            continue
+        declarations: list[str] = []
+        if element.layout is not None:
+            layout = element.layout
+            declarations.append(
+                f"position:absolute;left:{(layout.x / 12) * 100:.4f}%;"
+                f"top:{layout.y:.4f}%;width:{(layout.w / 12) * 100:.4f}%;"
+                f"height:{layout.h:.4f}%"
+            )
+        if element.style_override:
+            declarations.append(_style_string(element.style_override))
+        rules.append(
+            f'.slide-root[data-slide-id="{esc(slide_id)}"] '
+            f'[data-slot="{esc(element.slot_path)}"] {{ {";".join(declarations)} }}'
+        )
+    return "\n".join(rules)
+
+
+def _element_asset_id(slide: Slide, element: Element) -> str | None:
+    slot_value = slide.slots.get(element.slot_path)
+    if isinstance(slot_value, dict) and slot_value.get("kind") == "image":
+        asset_id = slot_value.get("assetId")
+        if isinstance(asset_id, str) and asset_id:
+            return asset_id
+    return None
+
+
+def _render_elements(slide: Slide, elements: list[Element], images: dict[str, str]) -> str:
+    parts: list[str] = []
+    for element in elements:
+        if element.layout is None:
+            continue
+        layout = element.layout
+        left = (layout.x / 12.0) * 100.0
+        width = (layout.w / 12.0) * 100.0
+        style = (
+            f"position:absolute;left:{left:.4f}%;top:{layout.y:.4f}%;"
+            f"width:{width:.4f}%;height:{layout.h:.4f}%"
+        )
+        if element.style_override:
+            style += ";" + _style_string(element.style_override)
+        if element.type == "image":
+            asset_id = _element_asset_id(slide, element)
+            slot = images.get(asset_id) if asset_id else None
+            inner = (
+                f'<img src="{esc(slot)}" alt="" style="width:100%;height:100%;object-fit:cover" />'
+                if slot
+                else '<span class="media-placeholder">图片未内联</span>'
+            )
+        elif element.type == "text":
+            slot_value = slide.slots.get(element.slot_path)
+            inner = f'<span class="element-text">{text_html(slot_value)}</span>'
+        elif element.type == "chart":
+            chart = slide.slots.get(element.slot_path)
+            inner = chart_svg(chart) if isinstance(chart, dict) else ""
+        elif element.type == "table":
+            table = slide.slots.get(element.slot_path)
+            inner = _media(table, images) if isinstance(table, dict) else ""
+        else:
+            inner = f'<span class="element-{esc(element.type)}"></span>'
+        parts.append(
+            f'<div class="element element-{esc(element.type)}" data-element-id="{esc(element.id)}" '
+            f'style="{style}">{inner}</div>'
+        )
+    return "".join(parts)
+
+
+def render_slide_html(slide: Slide, images: dict[str, str] | None = None) -> str:
+    images = images or {}
+    base = _render_layout_html(slide, images=images)
+    slot_rules = _slot_style_rules(slide.elements, slide.id)
+    free_elements = [
+        element
+        for element in slide.elements
+        if element.layout is not None and element.slot_path not in slide.slots
+    ]
+    elements_html = _render_elements(slide, free_elements, images)
+    overlay = f'<div class="element-layer">{elements_html}</div>' if elements_html else ""
+    style_tag = f"<style>{slot_rules}</style>" if slot_rules else ""
+    return (
+        f'<div class="slide-root" data-slide-id="{esc(slide.id)}">'
+        f"{style_tag}{base}{overlay}</div>"
+    )
+
+
 def slide_styles() -> str:
     return """
-.layout { width: 100%; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
+.slide-root { width: 100%; height: 100%; position: relative; overflow: hidden; }
+.layout { width: 100%; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; position: relative; }
+.element-layer { position: absolute; inset: 0; pointer-events: none; }
+.element { pointer-events: auto; box-sizing: border-box; }
+.element-text { display: block; width: 100%; height: 100%; overflow: hidden; }
+:root { --cjk-scale: 1.03; --line-height-cjk: 1.75; --line-height-mixed: 1.65; --line-height-heading: 1.25; }
+body { text-autospace: normal; line-break: strict; word-break: normal; overflow-wrap: anywhere; }
+.cjk-compensate { font-size: calc(1em * var(--cjk-scale)); }
+.zh-heavy { line-height: var(--line-height-cjk); }
+.mixed { line-height: var(--line-height-mixed); }
 .padded { padding: 64px 84px 56px; gap: 18px; }
 .section-title { font-family: var(--font-display, serif); font-size: 46px; line-height: var(--line-height-heading); margin: 0 0 6px; }
 .lead { font-size: 20px; color: var(--color-muted); margin: 0 0 6px; }

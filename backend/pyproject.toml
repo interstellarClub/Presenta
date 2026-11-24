@@ -31,3 +31,5 @@ exclude = ["app/db/migrations"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["deepseek: 真实 DeepSeek API 集成测试（需要真实 Key，默认跳过）"]
+addopts = "-m 'not deepseek'"

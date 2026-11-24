@@ -59,18 +59,23 @@ async def render_png_sequence(
     fps: int = 15,
     seconds: float = 8,
     max_width: int = 1280,
+    frame_times: list[float] | None = None,
+    dark_theme: bool = False,
+    slide_steps: list[list[str]] | None = None,
 ) -> RenderResult:
-    response = await _post(
-        "/render/gif",
-        {
-            "slides": slides_html,
-            "themeCss": theme_css,
-            "fps": fps,
-            "seconds": seconds,
-            "maxWidth": max_width,
-        },
-        timeout_s=900,
-    )
+    payload: dict[str, Any] = {
+        "slides": slides_html,
+        "themeCss": theme_css,
+        "fps": fps,
+        "seconds": seconds,
+        "maxWidth": max_width,
+        "darkTheme": dark_theme,
+    }
+    if frame_times is not None:
+        payload["frameTimes"] = frame_times
+    if slide_steps is not None:
+        payload["slideSteps"] = slide_steps
+    response = await _post("/render/gif", payload, timeout_s=900)
     if response.status_code >= 400:
         raise UpstreamError(f"render-svc gif failed ({response.status_code}): {response.text[:500]}")
     data = response.json()

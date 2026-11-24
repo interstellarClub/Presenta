@@ -35,7 +35,7 @@
 | 分享 | 密码 + 有效期，访客可下载全部格式 |
 | 版本历史 | 全量 JSON Patch 链，每 20 版全量锚点，里程碑可回退、可 diff |
 
-**当前阶段：M1**（文档 → 完整 deck 静态呈现）。动效、导出、分享、模板包尚未实现，接口与 Schema 已预留字段。
+**当前实现状态**：M1–M7 的主要代码路径已铺齐，包括结构化生成、编辑、动效、全格式导出、分享、模板包与观测。
 
 > **仓库实现状态（与本 README 的排期不完全同步，以此表为准）**
 >
@@ -44,19 +44,18 @@
 > - 文档：`.docx` / `.md` 上传、归一化 Markdown、字符级章节锚点、资产抽取（图片 / 表格；OMML 经 pandoc，失败降级并标注）
 > - 大纲：SSE 分阶段推送（摘要 → 规划 → 逐项），确认后才创建 Deck
 > - 逐页生成：`mock` / `deepseek` 双 provider，Pydantic 校验 + 修复 ≤2 + 失败降级纯文本页（`degraded`），任务状态含 `partial`
-> - 编辑：14 种版式渲染于 iframe 沙箱，点击选中插槽，JSON Patch 提交，`styleOverride` 覆盖层，乐观刷新
-> - 版本：Patch 链 + 每 20 版锚点 + 里程碑；列表 / 按 seq 回放 / 回滚
-> - 主题：6 套内置 Token + WCAG 对照报告；切主题只换 Token
+> - 编辑：14 种版式渲染于 iframe 沙箱，点击选中、12 列拖拽、图片替换、受控富文本、JSON Patch 与乐观刷新
+> - 自然语言编辑：模型生成 JSON Patch 预览，用户确认后应用
+> - 动效：motionLevel、fragment 步进、6 类受控组件与统一 seek(t)
+> - 版本：Patch 链 + 每 20 版锚点 + 里程碑；列表 / 按 seq 回放 / 回滚 / diff
+> - 主题：6 套内置 Token + WCAG；支持上传 Token/版式模板包并执行静态安全检查
 > - 导出：独立 HTML（资源内联）、PDF / GIF / PPTX（服务端 `render-svc`；未启动 render-svc 时明确报错，不静默降级）
+> - MP4：客户端 WebCodecs 逐帧编码 + MP4 封装；分享页支持由访客本地生成
 > - 分享：密码 + 有效期 + 下载格式白名单 + 访问日志 + 吊销；访客只读播放
 > - 清理：过期导出物 / 回收站 Deck / 过期分享 / 30 日访问日志（`app.cli.cleanup` 或 arq cron）
 > - 观测：`usage_ledger` 逐次计量、`audit_logs` 关键动作（永不删除）
 >
-> 尚未实现（相关 UI/接口要么显式拒绝，要么保留字段）：
-> - MP4 客户端 WebCodecs 逐帧编码（导出面板明确提示暂不可用）
-> - 用户模板包上传与七项校验器
-> - 自然语言指令编辑（M6）
-> - 动效组件库与真实 `seek(t)` 时间轴（保存 `transition` / `anim` / `steps` 字段，播放器按步进与转场元数据呈现）
+> 剩余生产化事项：
 > - 字体子集分发与字形覆盖校验（当前导出使用系统字体；生产需接入统一字体包）
 
 ---
@@ -167,7 +166,9 @@ uvicorn app.main:app --reload --port 8000
 cd web && npm install && npm run dev  # http://localhost:5173
 ```
 
-- `mock` 提供确定性大纲 / 页面（不联网），并在 `usage_ledger` 中标记 provider=mock。要接真实模型：`LLM_PROVIDER=deepseek` 且填写 `DEEPSEEK_API_KEY`（仅服务端）。
+- `mock` 提供确定性大纲 / 页面（不联网），并在 `usage_ledger` 中标记 provider=mock。
+- **接真实模型**：编辑 `.env`，设 `LLM_PROVIDER=deepseek` 并填入 `DEEPSEEK_API_KEY`（平台 Key，仅服务端可读，不要提交到仓库）。启动时若 Key 缺失、为占位值或过短，lifespan 会直接失败退出，不会静默降级到 mock。
+- 验收流程：`pytest -q`（默认跳过 `@pytest.mark.deepseek` 标记的真实调用测试）；配好真实 Key 后跑 `pytest -m deepseek -q` 验证真实计量与降级；`PYTHONPATH=. python scripts/smoke_deepseek.py` 做端到端冒烟。
 - PDF / GIF / PPTX 需要 `render-svc`：`cd render_svc && pip install -r requirements.txt && playwright install chromium && uvicorn app:app --port 8100`。未启动时导出接口会返回明确错误。
 - 端到端冒烟脚本：`cd backend && PYTHONPATH=. python scripts/smoke_pipeline.py`（注册 → 解析 → 大纲 → 生成 → 四种导出 → 分享）。
 

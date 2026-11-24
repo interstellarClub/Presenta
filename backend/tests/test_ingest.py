@@ -49,9 +49,11 @@ def test_build_ast_without_headings_creates_full_section() -> None:
 
 
 def test_sections_for_outline_truncates_text() -> None:
+    from app.core.config import settings
+
     ast = build_ast("# " + "标题" * 10 + "\n\n" + "内容" * 2000)
     outline_input = sections_for_outline(ast)
-    assert len(outline_input[0]["text"]) <= 4000
+    assert len(outline_input[0]["text"]) <= settings.max_section_prompt_chars
     assert summarize_section("一二三四五" * 100).endswith("…")
 
 

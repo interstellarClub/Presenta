@@ -1,10 +1,11 @@
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import select
 
 from app.api.schemas.auth import AuthResponse, LoginRequest, RegisterRequest, UserProfile
-from app.core.audit import audit
+from app.core.audit import audit, audit_isolated
 from app.core.config import settings
 from app.core.deps import CurrentUser, OptionalUser, SessionDep
 from app.core.errors import ForbiddenError, RateLimitError, UnauthorizedError, ValidationFailedError
@@ -140,11 +141,10 @@ async def login(
 
     user = await session.scalar(select(User).where(User.email == email))
     if user is None or not verify_password(payload.password, user.password_hash):
-        await audit(
-            session,
+        await audit_isolated(
             action="auth.login_failed",
             request=request,
-            meta={"email": email},
+            meta={"emailHash": hashlib.sha256(email.encode("utf-8")).hexdigest()[:16]},
         )
         raise UnauthorizedError("邮箱或密码不正确")
     if user.status != "active":

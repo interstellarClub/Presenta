@@ -48,3 +48,5 @@ class GuestDownload(CamelModel):
     url: str
     degraded: bool
     degraded_notes: list[str] = Field(default_factory=list)
+    degraded_details: list[dict[str, Any]] = Field(default_factory=list)
+    expires_at: datetime | None = None

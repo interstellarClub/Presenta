@@ -99,6 +99,7 @@ body {{
 @media print {{
   .presenta-controls {{ display: none; }}
   .presenta-slide {{ display: block !important; page-break-after: always; }}
+  [data-fragment] {{ opacity: 1 !important; }}
 }}
 {slide_styles()}
 """
@@ -126,6 +127,7 @@ def build_standalone_html(deck: Deck, manifest: dict[str, Any], images: dict[str
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
 <title>{title} · Presenta</title>
 <style>{_theme_css(manifest)}</style>
 </head>

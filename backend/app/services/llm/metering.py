@@ -5,6 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import UsageLedger
 
+UsageLedgerRow = UsageLedger
+
+
+def existing_usage(session: AsyncSession, upstream_call_id: str | None) -> UsageLedger | None:
+    if not upstream_call_id:
+        return None
+    for entry in session.new:
+        if isinstance(entry, UsageLedger) and entry.upstream_call_id == upstream_call_id:
+            return entry
+    return None
+
 
 async def record_usage(
     session: AsyncSession,
@@ -21,8 +32,9 @@ async def record_usage(
     deck_id: UUID | None = None,
     job_id: UUID | None = None,
     error_code: str | None = None,
+    upstream_call_id: str | None = None,
     now: datetime | None = None,
-) -> None:
+) -> UsageLedger:
     entry = UsageLedger(
         provider=provider,
         model=model,
@@ -34,6 +46,7 @@ async def record_usage(
         latency_ms=latency_ms,
         success=success,
         error_code=error_code,
+        upstream_call_id=upstream_call_id,
         user_id=user_id,
         deck_id=deck_id,
         job_id=job_id,
@@ -41,3 +54,4 @@ async def record_usage(
     )
     session.add(entry)
     await session.flush()
+    return entry

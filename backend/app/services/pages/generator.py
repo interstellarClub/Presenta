@@ -10,22 +10,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas.deck import Deck, DeckMeta, Provenance, Slide
 from app.api.schemas.outline import Outline
 from app.api.schemas.pages import PageDraft, draft_to_slide
+from app.core.config import settings
 from app.core.errors import ValidationFailedError
 from app.db.models import Deck as DeckRow
 from app.db.models import DeckVersion as DeckVersionRow
 from app.db.models import DocAsset, Document
 from app.services.deck.layouts import LAYOUTS, display_width, layout_catalog_for_prompt
+from app.services.deck.semantics import ensure_deck_semantics
 from app.services.deck.versioning import create_version
 from app.services.ingest.markdown import summarize_section
 from app.services.llm.gateway import generate_structured
 from app.services.llm.prompts import load_prompt, render
 from app.services.pages.validator import (
+    attach_media_provenance,
     attach_section_provenance,
     semantic_issues,
 )
 
-PAGE_ATTEMPTS = 2
-MAX_SECTION_CHARS = 6000
+PAGE_ATTEMPTS = 3
+
 
 
 class JobCancelled(Exception):
@@ -107,7 +110,7 @@ async def _asset_payload(session: AsyncSession, document_id: UUID) -> list[dict[
             select(DocAsset)
             .where(DocAsset.document_id == document_id)
             .order_by(DocAsset.kind, DocAsset.created_at)
-            .limit(24)
+            .limit(settings.max_asset_prompt_count)
         )
     ).all()
     payload: list[dict[str, Any]] = []
@@ -143,24 +146,26 @@ def _page_prompt(
     allowed_layouts: list[str],
     assets: list[dict[str, Any]],
 ) -> tuple[str, str]:
-    template = load_prompt("pages", "page")
-    system_prompt = render(template, layout_catalog=layout_catalog_for_prompt())
+    system_prompt = render(
+        load_prompt("pages", "page"), layout_catalog=layout_catalog_for_prompt()
+    )
     source_ref = {
         "lineStart": section.get("lineStart"),
         "lineEnd": section.get("lineEnd"),
     }
-    user_prompt = (
-        f"文稿标题：{outline.title}\n"
-        f"页码：{item_index + 1} / {len(outline.items)}\n"
-        f"页面标题候选：{item_title}\n"
-        f"该页要点：{json.dumps(points, ensure_ascii=False)}\n"
-        f"允许版式 id：{json.dumps(allowed_layouts)}\n"
-        f"章节 id：{section.get('id')}\n"
-        f"原文定位：{json.dumps(source_ref, ensure_ascii=False)}\n"
-        f"文档 id：{document.id}\n"
-        f"原始正文（节选）：\n{str(section.get('text') or '')[:MAX_SECTION_CHARS]}\n"
-        f"可用资产（JSON）：\n{json.dumps(assets, ensure_ascii=False)[:4000]}\n"
-        "请只输出 JSON。"
+    user_prompt = render(
+        load_prompt("pages", "page_user"),
+        document_title=outline.title,
+        page_index=str(item_index + 1),
+        page_total=str(len(outline.items)),
+        item_title=item_title,
+        points=json.dumps(points, ensure_ascii=False),
+        section_id=str(section.get("id")),
+        source_ref=json.dumps(source_ref, ensure_ascii=False),
+        allowed_layouts=json.dumps(allowed_layouts),
+        document_id=str(document.id),
+        section_text=str(section.get("text") or "")[: settings.max_page_section_chars],
+        assets=json.dumps(assets, ensure_ascii=False)[: settings.max_asset_prompt_chars],
     )
     return system_prompt, user_prompt
 
@@ -175,6 +180,8 @@ async def generate_pages(
     job_id: UUID | None = None,
     progress: Callable[[int, str], Awaitable[None]] | None = None,
     check_cancel: Callable[[], Awaitable[bool]] | None = None,
+    persist_partial: Callable[[int, list[dict[str, Any]], int], Awaitable[None]] | None = None,
+    partial_slides: list[dict[str, Any]] | None = None,
 ) -> tuple[Deck, list[DeckVersionRow]]:
     ast = document.ast or {}
     sections = ast.get("sections") or []
@@ -182,8 +189,18 @@ async def generate_pages(
     assets = await _asset_payload(session, document.id)
     slides: list[Slide] = []
     degraded_count = 0
+    start_index = 0
+    if partial_slides:
+        for entry in partial_slides:
+            try:
+                slides.append(Slide.model_validate(entry))
+            except Exception:
+                break
+        start_index = len(slides)
 
     for index, item in enumerate(outline.items):
+        if index < start_index:
+            continue
         if check_cancel is not None and await check_cancel():
             raise JobCancelled("job cancelled by user")
         section = _resolve_section(sections, index, item.section_id)
@@ -213,13 +230,14 @@ async def generate_pages(
 
         slide: Slide | None = None
         issues: list[str] = []
+        previous_json = ""
         for attempt in range(PAGE_ATTEMPTS):
             prompt = user_prompt
             if attempt > 0 and issues:
                 repair = load_prompt("pages", "repair")
                 errors_text = "\n".join(issues)
                 prompt = user_prompt + "\n\n" + render(
-                    repair, errors=errors_text, previous_json=""
+                    repair, errors=errors_text, previous_json=previous_json
                 )
             try:
                 draft: PageDraft = await generate_structured(
@@ -234,12 +252,17 @@ async def generate_pages(
                     job_id=job_id,
                     thinking=True,
                     temperature=0.2,
+                    repair_budget=0,
                 )
+                previous_json = json.dumps(
+                    draft.model_dump(mode="json", by_alias=True), ensure_ascii=False
+                )[:12000]
                 candidate = draft_to_slide(draft)
                 if candidate.layout not in allowed:
                     issues = [f"版式 '{candidate.layout}' 不在本页允许列表"]
                     continue
                 attach_section_provenance(candidate, section, document.id, document_text)
+                attach_media_provenance(candidate)
                 issues = await semantic_issues(
                     session,
                     candidate,
@@ -251,6 +274,13 @@ async def generate_pages(
                     break
             except ValidationFailedError as exc:
                 issues = [str(exc)]
+                raw = exc.details.get("raw")
+                if isinstance(raw, str) and raw.strip():
+                    previous_json = raw[:12000]
+                elif exc.details.get("invalid_payload") is not None:
+                    previous_json = json.dumps(
+                        exc.details["invalid_payload"], ensure_ascii=False
+                    )[:12000]
 
         if slide is None:
             degraded_count += 1
@@ -265,6 +295,12 @@ async def generate_pages(
         if progress is not None:
             percent = int((index + 1) / max(1, len(outline.items)) * 100)
             await progress(percent, f"generating({index + 1}/{len(outline.items)})")
+        if persist_partial is not None:
+            await persist_partial(
+                index + 1,
+                [entry.model_dump(mode="json", by_alias=True) for entry in slides],
+                len(outline.items),
+            )
 
     provenance: list[Provenance] = [entry for slide in slides for entry in slide.provenance]
     deck = Deck(
@@ -280,6 +316,13 @@ async def generate_pages(
         provenance=provenance,
     )
     deck_row.title = outline.title
+    await ensure_deck_semantics(
+        session,
+        deck,
+        document=document,
+        require_non_empty=True,
+        expected_deck_id=deck_row.id.hex,
+    )
     snapshot = deck.model_dump(mode="json", by_alias=True)
     version = await create_version(
         session,

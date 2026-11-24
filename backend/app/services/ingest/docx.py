@@ -234,22 +234,21 @@ def docx_to_markdown(path: Path) -> DocxResult:
         if _has_math(paragraph):
             xml = etree.tostring(paragraph._p, encoding="unicode")
             math_markdown = convert_paragraph_math(xml)
-            if math_markdown:
-                result.formulas.append(
-                    ExtractedFormula(
-                        asset_id=_new_asset_id(),
-                        latex=math_markdown,
-                        original_xml=xml[:20000],
-                        source_ref={
-                            "lineStart": len(lines) + 1,
-                            "colStart": 0,
-                            "lineEnd": len(lines) + 1,
-                            "colEnd": len(math_markdown),
-                        },
-                    )
+            result.formulas.append(
+                ExtractedFormula(
+                    asset_id=_new_asset_id(),
+                    latex=math_markdown,
+                    original_xml=xml[:20000],
+                    source_ref={
+                        "lineStart": len(lines) + 1,
+                        "colStart": 0,
+                        "lineEnd": len(lines) + 1,
+                        "colEnd": len(math_markdown or xml[:200]),
+                    },
                 )
-            else:
-                result.degraded.append("OMML 公式转换失败，已保留占位说明")
+            )
+            if not math_markdown:
+                result.degraded.append("OMML 公式转换失败，已保留原始 XML 供后续裁图或重试")
 
         if math_markdown:
             text = math_markdown
@@ -259,7 +258,7 @@ def docx_to_markdown(path: Path) -> DocxResult:
                 pieces.append(_run_text(run))
             text = "".join(pieces).strip() or (paragraph.text or "").strip()
             if _has_math(paragraph) and not math_markdown:
-                text = f"{text}（公式，未能转换）".strip()
+                text = f"{text}（公式，已保留原始 XML 待重试）".strip()
 
         image_markdown = " ".join(f"![](asset://{image.asset_id})" for image in images)
         combined = " ".join(part for part in (text, image_markdown) if part).strip()

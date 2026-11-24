@@ -1,13 +1,14 @@
 import re
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas.deck import Provenance, Slide, SourceRef
+from app.api.schemas.deck import Element, Provenance, Slide, SourceRef
 from app.db.models import DocAsset
 from app.services.deck.layouts import LAYOUTS, display_width
+from app.services.deck.semantics import load_assets_for, slide_semantic_issues
 
 _NUMBER_CLEAN = re.compile(r"[,\s\u00a0]")
 
@@ -40,31 +41,83 @@ def attach_section_provenance(
     if not text:
         return False
     quote = text[:400].strip()
-    if quote and quote in document_text:
-        slide.provenance = [
-            Provenance(
-                type="original",
-                document_id=document_id,
-                source_ref=section_source_ref(section),
-                quote=quote,
+    if not quote or quote not in document_text:
+        return False
+
+    spec = LAYOUTS.get(slide.layout)
+    slot_kinds = {slot.kind for slot in spec.slots.values()} if spec else set()
+    provenance_type: Literal["original", "derived"] = "original"
+    original_data = None
+    if "chart" in slot_kinds:
+        provenance_type = "derived"
+        chart = slide.slots.get("chart") or {}
+        original_data = {
+            "columns": ["label", "value"],
+            "rows": [
+                [point.get("label"), point.get("value")]
+                for series in chart.get("series") or []
+                for point in series.get("points") or []
+            ],
+            "unit": chart.get("unit", ""),
+        }
+    elif "numbers" in slot_kinds:
+        provenance_type = "derived"
+        original_data = {"numbers": slide.slots.get("numbers") or []}
+
+    slide.provenance = [
+        Provenance(
+            type=provenance_type,
+            document_id=document_id,
+            source_ref=section_source_ref(section),
+            quote=quote,
+            original_data=original_data,
+        )
+    ]
+    return True
+
+
+def attach_media_provenance(slide: Slide) -> None:
+    """Give every media slot an Element with an explicit provenance link."""
+    if not slide.provenance and not slide.elements:
+        return
+    existing = {element.slot_path for element in slide.elements}
+    media = iter_media(slide.slots)
+    type_map = {"image": "image", "chart": "chart", "table": "table"}
+    for index, entry in enumerate(media):
+        path = str(entry.get("__path__") or "")
+        if not path or path in existing:
+            continue
+        kind = str(entry.get("kind"))
+        if kind not in type_map:
+            continue
+        provenance: Provenance | None = None
+        if slide.provenance:
+            if len(media) == len(slide.provenance):
+                provenance = slide.provenance[index]
+            else:
+                provenance = slide.provenance[min(index, len(slide.provenance) - 1)]
+        slide.elements.append(
+            Element(
+                type=type_map[kind],  # type: ignore[arg-type]
+                slot_path=path,
+                provenance=provenance,
             )
-        ]
-        return True
-    return False
+        )
 
 
 def iter_media(slots: dict[str, Any]) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
 
-    def walk(value: Any) -> None:
+    def walk(value: Any, path: str = "") -> None:
         if isinstance(value, dict):
             if value.get("kind") in {"image", "chart", "table"}:
-                found.append(value)
-            for child in value.values():
-                walk(child)
+                found.append({**value, "__path__": path})
+                return
+            for key, child in value.items():
+                walk(child, f"{path}.{key}" if path else str(key))
         elif isinstance(value, list):
-            for child in value:
-                walk(child)
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
 
     walk(slots)
     return found
@@ -107,35 +160,10 @@ def _normalize(text: str) -> str:
 
 
 def validate_quotes_and_numbers(slide: Slide, document_text: str) -> list[str]:
-    issues: list[str] = []
-    expected_provenance = layout_requires_provenance(slide.layout)
-    if expected_provenance and not slide.provenance:
-        issues.append("缺少 provenance：该版式必须提供 sourceRef 与逐字 quote")
-        return issues
-
-    for provenance in slide.provenance:
-        if provenance.quote and provenance.quote not in document_text:
-            issues.append("provenance.quote 不是原文逐字片段，禁止改写或拼接来源")
-
-    quotes = " ".join(provenance.quote for provenance in slide.provenance)
-    normalized_quote = _normalize(quotes)
-    for value in collect_chart_values(slide):
-        if not any(_normalize(variant) in normalized_quote for variant in _number_variants(value)):
-            issues.append(f"图表数值 {value:g} 无法在来源原文中逐字符串匹配")
-
-    for media in iter_media(slide.slots):
-        if media.get("kind") == "table" and expected_provenance and not slide.provenance:
-            issues.append("表格数据缺少来源标注")
-
-    numbers_slot = slide.slots.get("numbers")
-    if isinstance(numbers_slot, list):
-        for item in numbers_slot:
-            if not isinstance(item, dict):
-                continue
-            number_text = str(item.get("value") or "").strip()
-            if number_text and _normalize(number_text) not in normalized_quote:
-                issues.append(f"关键数字 '{number_text}' 无法在来源原文中逐字符串匹配")
-    return issues
+    document_id = slide.provenance[0].document_id if slide.provenance else UUID(int=0)
+    return slide_semantic_issues(
+        slide, document_id=document_id, document_text=document_text, assets={}
+    )
 
 
 async def validate_assets(
@@ -181,6 +209,19 @@ async def semantic_issues(
 ) -> list[str]:
     issues: list[str] = []
     issues.extend(validate_lengths(slide))
-    issues.extend(validate_quotes_and_numbers(slide, document_text))
-    issues.extend(await validate_assets(session, slide, document_id))
+    parsed: list[UUID] = []
+    for asset_id in collect_asset_ids(slide):
+        try:
+            parsed.append(UUID(asset_id))
+        except ValueError:
+            issues.append(f"图片 assetId 非法：{asset_id}")
+    assets = await load_assets_for(session, document_id, set(parsed))
+    issues.extend(
+        slide_semantic_issues(
+            slide,
+            document_id=document_id,
+            document_text=document_text,
+            assets=assets,
+        )
+    )
     return issues

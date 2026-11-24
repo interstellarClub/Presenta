@@ -32,3 +32,39 @@ async def audit(
         )
     )
     await session.flush()
+
+async def audit_isolated(
+    *,
+    action: str,
+    user_id: UUID | None = None,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    request: Request | None = None,
+    meta: dict[str, Any] | None = None,
+) -> None:
+    import logging
+
+    from app.core.metrics import increment
+    from app.db.session import SessionFactory
+
+    logger = logging.getLogger("presenta.audit")
+    try:
+        async with SessionFactory() as session:
+            await audit(
+                session,
+                action=action,
+                user_id=user_id,
+                target_type=target_type,
+                target_id=target_id,
+                request=request,
+                meta=meta,
+            )
+            await session.commit()
+    except Exception:
+        failures = increment("audit_write_failures")
+        logger.critical(
+            "ALERT isolated audit write failed for action=%s (total failures=%s)",
+            action,
+            failures,
+            exc_info=True,
+        )

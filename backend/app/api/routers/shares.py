@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
@@ -136,10 +137,10 @@ async def guest_unlock(
 ) -> UnlockResponse:
     share = await share_service.active_share(session, slug)
     deck = await share_service.share_deck(session, share)
-    token, expires = await share_service.unlock(session, share, payload.password, request)
+    raw_token, expires = await share_service.unlock(session, share, payload.password, request)
     response.set_cookie(
         key=share_service.share_cookie_name(slug),
-        value=token,
+        value=raw_token,
         expires=expires,
         httponly=True,
         secure=settings.session_cookie_secure,
@@ -163,24 +164,43 @@ async def guest_download(
     fmt: str,
     session: SessionDep,
     request: Request,
+    response: Response,
 ) -> GuestDownload:
     share = await share_service.active_share(session, slug)
-    share_service.require_unlocked(slug, request)
+    raw_token, token_expires = await share_service.require_unlocked(session, share, request)
+    response.set_cookie(
+        key=share_service.share_cookie_name(slug),
+        value=raw_token,
+        expires=token_expires,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
     share_service.ensure_format_allowed(share, fmt)
     deck = await share_service.share_deck(session, share)
-    artifact, _ = await create_export(
-        session,
-        deck_row=deck,
-        user_id=share.created_by,
-        fmt=fmt,
-    )
+    async with share_service.download_lock(share.id, fmt):
+        artifact, _ = await create_export(
+            session,
+            deck_row=deck,
+            user_id=share.created_by,
+            fmt=fmt,
+        )
     await share_service.log_access(
         session, share, f"download_{fmt}", request, {"artifactId": str(artifact.id)}
     )
+    if settings.storage_backend == "s3":
+        url = await storage.url_for(artifact.storage_key, settings.download_url_ttl_s)
+        expires = datetime.now(UTC) + timedelta(seconds=settings.download_url_ttl_s)
+    else:
+        url = f"/api/shares/guest/{slug}/files/{artifact.id}"
+        expires = None
     return GuestDownload(
-        url=f"/api/shares/guest/{slug}/files/{artifact.id}",
+        url=url,
         degraded=artifact.degraded,
         degraded_notes=list(artifact.degraded_notes or []),
+        degraded_details=list(artifact.degraded_details or []),
+        expires_at=expires,
     )
 
 
@@ -190,16 +210,18 @@ async def guest_file(
     artifact_id: UUID,
     session: SessionDep,
     request: Request,
+    response: Response,
 ) -> Response:
     share = await share_service.active_share(session, slug)
-    share_service.require_unlocked(slug, request)
+    raw_token, token_expires = await share_service.require_unlocked(session, share, request)
     if not share.allow_download:
         raise ConflictError("该分享不允许下载")
     artifact = await session.get(ExportArtifact, artifact_id)
     if artifact is None or artifact.deck_id != share.deck_id:
         raise NotFoundError("导出物不存在")
+    share_service.ensure_format_allowed(share, artifact.format)
     data = await storage.get_bytes(artifact.storage_key)
-    return Response(
+    result = Response(
         content=data,
         media_type={
             "pdf": "application/pdf",
@@ -209,3 +231,13 @@ async def guest_file(
         }.get(artifact.format, "application/octet-stream"),
         headers={"Content-Disposition": f'attachment; filename="{share.slug}.{artifact.format}"'},
     )
+    result.set_cookie(
+        key=share_service.share_cookie_name(slug),
+        value=raw_token,
+        expires=token_expires,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+    return result

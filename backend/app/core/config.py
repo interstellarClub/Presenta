@@ -2,11 +2,22 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_DIR = BACKEND_DIR.parent
+
+_PLACEHOLDER_API_KEYS = frozenset(
+    {
+        "请填入真实 key（不要提交到仓库）",
+        "sk-...",
+        "your-api-key",
+        "replace-me",
+        "changeme",
+        "xxx",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -18,6 +29,7 @@ class Settings(BaseSettings):
     )
 
     app_env: Literal["dev", "test", "prod"] = "dev"
+    allow_mock_in_prod: bool = False
     app_name: str = "Presenta"
     api_prefix: str = "/api"
     web_origin: str = "http://localhost:5173"
@@ -38,8 +50,8 @@ class Settings(BaseSettings):
     s3_secret: str = "minioadmin"
     s3_region: str = "us-east-1"
 
-    llm_provider: Literal["mock", "deepseek"] = "mock"
-    deepseek_api_key: str | None = None
+    llm_provider: Literal["mock", "deepseek"] = "deepseek"
+    deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-flash"
     deepseek_thinking: bool = True
@@ -47,6 +59,7 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_max_tokens: int = 8192
     batch_concurrency_per_user: int = 3
+    allow_external_provenance: bool = False
 
     pandoc_path: str = "pandoc"
     render_svc_url: str = "http://localhost:8100"
@@ -60,8 +73,22 @@ class Settings(BaseSettings):
 
     max_upload_mb: int = 50
     max_deck_pages: int = 500
+    max_outline_sections: int = 120
+    max_section_summary_chars: int = 480
+    max_section_prompt_chars: int = 8000
+    max_page_section_chars: int = 12000
+    max_asset_prompt_count: int = 48
+    max_asset_prompt_chars: int = 16000
     ingest_timeout_s: int = 120
+    generate_timeout_s: int = 1800
+    export_timeout_s: int = 900
+    cleanup_timeout_s: int = 600
     max_patch_ops: int = 200
+    max_docx_uncompressed_mb: int = 200
+    max_docx_compression_ratio: int = 100
+    share_session_ttl_s: int = 7200
+    share_token_keep_expired_days: int = 7
+    orphan_grace_days: int = 7
 
     rate_limit_register_per_hour: int = 5
     rate_limit_login_per_hour: int = 30
@@ -88,6 +115,28 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
+
+    @property
+    def max_docx_uncompressed_bytes(self) -> int:
+        return self.max_docx_uncompressed_mb * 1024 * 1024
+
+    @property
+    def deepseek_api_key_configured(self) -> bool:
+        value = self.deepseek_api_key
+        if value is None:
+            return False
+        raw = (
+            value.get_secret_value().strip()
+            if isinstance(value, SecretStr)
+            else str(value).strip()
+        )
+        if not raw or len(raw) < 16:
+            return False
+        if raw.lower() in _PLACEHOLDER_API_KEYS:
+            return False
+        if raw.startswith("请填入") or raw.lower().startswith("replace"):
+            return False
+        return True
 
 
 @lru_cache

@@ -14,12 +14,19 @@ class ExportRequest(CamelModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class DegradedDetail(CamelModel):
+    slide_id: str
+    slide_index: int
+    reason: str
+
+
 class ExportArtifactView(CamelModel):
     id: UUID
     format: str
     bytes: int
     degraded: bool
     degraded_notes: list[str] = Field(default_factory=list)
+    degraded_details: list[DegradedDetail] = Field(default_factory=list)
     download_url: str
     expires_at: str
 

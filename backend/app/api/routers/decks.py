@@ -1,15 +1,19 @@
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+import jsonpatch
 from fastapi import APIRouter, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.schemas.deck import Deck, DeckMeta
 from app.api.schemas.decks import (
     DeckCreate,
     DeckResponse,
     GenerateResponse,
+    IntentRequest,
+    IntentResponse,
     PatchSubmit,
     RollbackRequest,
     VersionSummary,
@@ -27,6 +31,7 @@ from app.services.deck.versioning import (
     load_deck_at,
     rollback_to,
 )
+from app.services.intent.nl_to_patch import generate_intent_patch
 from app.services.jobs import create_job, enqueue_job
 from app.services.theme.manifest import load_manifest, wcag_report
 
@@ -175,7 +180,9 @@ async def generate_deck(
             "documentId": str(document.id),
             "outline": document.outline,
         },
-        idempotency_key=f"deck:{deck_row.id}:v{deck_row.current_version_seq}",
+        idempotency_key=(
+            f"deck:{deck_row.id}:v{deck_row.current_version_seq}:{uuid.uuid4().hex[:8]}"
+        ),
         max_attempts=2,
     )
     await audit(
@@ -187,7 +194,8 @@ async def generate_deck(
         request=request,
         meta={"jobId": str(job.id)},
     )
-    await enqueue_job(job.id)
+    await session.commit()
+    await enqueue_job(job.id, kind=job.kind)
     return GenerateResponse(job_id=job.id, version_seq=deck_row.current_version_seq)
 
 
@@ -200,6 +208,12 @@ async def patch_deck(
     request: Request,
 ) -> DeckResponse:
     deck_row = await _owned_deck(session, deck_id, user.id)
+    locked = await session.scalar(
+        select(DeckRow).where(DeckRow.id == deck_row.id).with_for_update()
+    )
+    if locked is not None:
+        deck_row = locked
+    document = await session.get(Document, deck_row.document_id) if deck_row.document_id else None
     version = await commit_deck_change(
         session,
         deck_row,
@@ -207,6 +221,8 @@ async def patch_deck(
         kind=payload.kind,
         label=payload.label,
         created_by=user.id,
+        document=document,
+        expected_seq=payload.expected_seq,
     )
     await audit(
         session,
@@ -221,9 +237,46 @@ async def patch_deck(
     return _response(current, deck_row.current_version_seq, deck_row.theme_id)
 
 
+@router.post("/{deck_id}/intent", response_model=IntentResponse)
+async def preview_intent_patch(
+    deck_id: UUID,
+    payload: IntentRequest,
+    user: CurrentUser,
+    session: SessionDep,
+) -> IntentResponse:
+    deck_row = await _owned_deck(session, deck_id, user.id)
+    if payload.expected_seq is not None and deck_row.current_version_seq != payload.expected_seq:
+        raise ConflictError(
+            "版本已被其他编辑更新，请刷新后重试",
+            details={
+                "expectedSeq": payload.expected_seq,
+                "currentSeq": deck_row.current_version_seq,
+            },
+        )
+    operations, explanation = await generate_intent_patch(
+        session,
+        deck_row=deck_row,
+        instruction=payload.instruction,
+        user_id=user.id,
+    )
+    current = await load_deck_at(session, deck_row.id, deck_row.current_version_seq)
+    from app.services.deck.versioning import apply_patch_payload
+
+    preview = apply_patch_payload(current, operations)
+    return IntentResponse(
+        operations=operations,
+        explanation=explanation,
+        preview=preview,
+    )
+
+
 @router.get("/{deck_id}/versions", response_model=list[VersionSummary])
 async def list_versions(
-    deck_id: UUID, user: CurrentUser, session: SessionDep
+    deck_id: UUID,
+    user: CurrentUser,
+    session: SessionDep,
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[VersionSummary]:
     deck_row = await _owned_deck(session, deck_id, user.id)
     versions = (
@@ -231,7 +284,8 @@ async def list_versions(
             select(DeckVersionRow)
             .where(DeckVersionRow.deck_id == deck_row.id)
             .order_by(DeckVersionRow.seq.desc())
-            .limit(200)
+            .limit(max(1, min(500, limit)))
+            .offset(max(0, offset))
         )
     ).all()
     return [
@@ -253,10 +307,38 @@ async def get_version(
     deck_id: UUID, seq: int, user: CurrentUser, session: SessionDep
 ) -> DeckResponse:
     deck_row = await _owned_deck(session, deck_id, user.id)
-    if seq < 1 or seq > deck_row.current_version_seq:
+    max_seq = await session.scalar(
+        select(func.max(DeckVersionRow.seq)).where(DeckVersionRow.deck_id == deck_row.id)
+    )
+    if seq < 1 or seq > int(max_seq or 0):
         raise NotFoundError("版本不存在")
     payload = await load_deck_at(session, deck_row.id, seq)
     return _response(payload, seq, deck_row.theme_id)
+
+
+@router.get("/{deck_id}/diff")
+async def diff_versions(
+    deck_id: UUID,
+    from_seq: int,
+    to_seq: int,
+    user: CurrentUser,
+    session: SessionDep,
+) -> dict[str, Any]:
+    deck_row = await _owned_deck(session, deck_id, user.id)
+    max_seq = await session.scalar(
+        select(func.max(DeckVersionRow.seq)).where(DeckVersionRow.deck_id == deck_row.id)
+    )
+    if from_seq < 1 or to_seq < 1 or from_seq > int(max_seq or 0) or to_seq > int(max_seq or 0):
+        raise NotFoundError("版本不存在")
+    before = await load_deck_at(session, deck_row.id, from_seq)
+    after = await load_deck_at(session, deck_row.id, to_seq)
+    operations = jsonpatch.make_patch(before, after).patch
+    return {
+        "fromSeq": from_seq,
+        "toSeq": to_seq,
+        "count": len(operations),
+        "operations": operations,
+    }
 
 
 @router.post("/{deck_id}/rollback", response_model=DeckResponse)
@@ -268,9 +350,13 @@ async def rollback(
     request: Request,
 ) -> DeckResponse:
     deck_row = await _owned_deck(session, deck_id, user.id)
-    if payload.target_seq < 1 or payload.target_seq > deck_row.current_version_seq:
+    max_seq = await session.scalar(
+        select(func.max(DeckVersionRow.seq)).where(DeckVersionRow.deck_id == deck_row.id)
+    )
+    if payload.target_seq < 1 or payload.target_seq > int(max_seq or 0):
         raise NotFoundError("目标版本不存在")
-    await rollback_to(session, deck_row, payload.target_seq, created_by=user.id)
+    document = await session.get(Document, deck_row.document_id) if deck_row.document_id else None
+    await rollback_to(session, deck_row, payload.target_seq, document=document)
     await audit(
         session,
         action="deck.rollback",
@@ -293,6 +379,7 @@ async def change_theme(
 ) -> DeckResponse:
     deck_row = await _owned_deck(session, deck_id, user.id)
     manifest = load_manifest(theme_id)
+    document = await session.get(Document, deck_row.document_id) if deck_row.document_id else None
     await commit_deck_change(
         session,
         deck_row,
@@ -300,6 +387,7 @@ async def change_theme(
         kind="milestone",
         label="theme change",
         created_by=user.id,
+        document=document,
     )
     deck_row.theme_id = manifest["id"]
     current = await load_deck_at(session, deck_row.id, deck_row.current_version_seq)

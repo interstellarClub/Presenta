@@ -198,7 +198,11 @@ def build_ast(md: str) -> dict[str, Any]:
     }
 
 
-def summarize_section(text: str, limit: int = 240) -> str:
+def summarize_section(text: str, limit: int | None = None) -> str:
+    if limit is None:
+        from app.core.config import settings
+
+        limit = settings.max_section_summary_chars
     compact = re.sub(r"\s+", " ", text).strip()
     if len(compact) <= limit:
         return compact
@@ -210,6 +214,8 @@ def summarize_section(text: str, limit: int = 240) -> str:
 
 
 def sections_for_outline(ast: dict[str, Any]) -> list[dict[str, Any]]:
+    from app.core.config import settings
+
     result = []
     for section in ast.get("sections", []):
         result.append(
@@ -218,7 +224,7 @@ def sections_for_outline(ast: dict[str, Any]) -> list[dict[str, Any]]:
                 "title": section["title"],
                 "level": section["level"],
                 "summary": summarize_section(section.get("text", "")),
-                "text": section.get("text", "")[:4000],
+                "text": section.get("text", "")[: settings.max_section_prompt_chars],
             }
         )
     return result

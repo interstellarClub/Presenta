@@ -3,9 +3,16 @@ import random
 
 
 class RetryableUpstreamError(Exception):
-    def __init__(self, message: str, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_code: str = "upstream_error",
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.error_code = error_code
 
 
 def is_retryable_status(status_code: int) -> bool:

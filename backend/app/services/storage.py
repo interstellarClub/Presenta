@@ -3,6 +3,8 @@ import hashlib
 import mimetypes
 import re
 import shutil
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -69,6 +71,20 @@ class LocalStorage:
         shutil.copyfile(self._path(key), destination)
         return destination
 
+    async def list_keys(self, prefix: str, older_than_s: int = 0) -> list[str]:
+        root = self._path(prefix.strip("/"))
+        if not root.exists():
+            return []
+        cutoff = time.time() - older_than_s
+        keys: list[str] = []
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.stat().st_mtime > cutoff:
+                continue
+            keys.append(path.relative_to(self.root.resolve()).as_posix())
+        return keys
+
 
 class S3Storage:
     backend = "s3"
@@ -133,6 +149,22 @@ class S3Storage:
         async with aiofiles.open(destination, "wb") as handle:
             await handle.write(data)
         return destination
+
+    async def list_keys(self, prefix: str, older_than_s: int = 0) -> list[str]:
+        cutoff = datetime.now(UTC).timestamp() - older_than_s
+
+        def _list() -> list[str]:
+            keys: list[str] = []
+            paginator = self.client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix.strip("/") + "/"):
+                for entry in page.get("Contents") or []:
+                    last_modified = entry.get("LastModified")
+                    if last_modified is not None and last_modified.timestamp() > cutoff:
+                        continue
+                    keys.append(str(entry.get("Key")))
+            return keys
+
+        return await asyncio.to_thread(_list)
 
 
 def _build_storage() -> LocalStorage | S3Storage:

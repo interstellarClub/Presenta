@@ -1,10 +1,12 @@
+import hashlib
+import json
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas.exports import ExportArtifactView, ExportRequest, ExportStart
+from app.api.schemas.exports import DegradedDetail, ExportArtifactView, ExportRequest, ExportStart
 from app.core.deps import CurrentUser, SessionDep, ensure_owner
 from app.core.errors import ConflictError, NotFoundError
 from app.db.models import Deck as DeckRow
@@ -20,12 +22,22 @@ _EXT = {"pdf": "pdf", "pptx": "pptx", "gif": "gif", "html": "html"}
 
 
 def _view(artifact: ExportArtifact) -> ExportArtifactView:
+    details = [
+        DegradedDetail(
+            slide_id=str(item.get("slideId", "")),
+            slide_index=int(item.get("slideIndex", 0)),
+            reason=str(item.get("reason", "unknown")),
+        )
+        for item in (artifact.degraded_details or [])
+        if isinstance(item, dict)
+    ]
     return ExportArtifactView(
         id=artifact.id,
         format=artifact.format,
         bytes=artifact.bytes,
         degraded=artifact.degraded,
         degraded_notes=list(artifact.degraded_notes or []),
+        degraded_details=details,
         download_url=f"/api/exports/{artifact.id}/download",
         expires_at=artifact.expires_at.isoformat(),
     )
@@ -63,6 +75,9 @@ async def start_export(
         return ExportStart(artifact=_view(artifact), cached=cached)
 
     kind = JOB_KIND[payload.format]
+    options_digest = hashlib.sha256(
+        json.dumps(payload.options, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
     job = await create_job(
         session,
         user_id=user.id,
@@ -72,6 +87,9 @@ async def start_export(
             "versionSeq": deck.current_version_seq,
             "options": payload.options,
         },
+        idempotency_key=(
+            f"export:{deck.id}:{payload.format}:v{deck.current_version_seq}:{options_digest}"
+        ),
         max_attempts=2,
     )
     from app.core.audit import audit
@@ -85,7 +103,8 @@ async def start_export(
         request=request,
         meta={"format": payload.format, "jobId": str(job.id)},
     )
-    await enqueue_job(job.id)
+    await session.commit()
+    await enqueue_job(job.id, kind=job.kind)
     return ExportStart(job_id=job.id)
 
 

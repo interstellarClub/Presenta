@@ -118,8 +118,15 @@ async def test_full_m1_flow(client: AsyncClient, invited_user: dict) -> None:
         f"/api/decks/{deck_id}/rollback", json={"targetSeq": generation_seq}
     )
     assert rolled.status_code == 200, rolled.text
-    assert rolled.json()["versionSeq"] == patch_seq + 1
+    assert rolled.json()["versionSeq"] == generation_seq
     assert rolled.json()["deck"]["slides"][0]["slots"]["title"] != "新的封面标题"
+
+    redone = await client.post(
+        f"/api/decks/{deck_id}/rollback", json={"targetSeq": patch_seq}
+    )
+    assert redone.status_code == 200, redone.text
+    assert redone.json()["versionSeq"] == patch_seq
+    assert redone.json()["deck"]["slides"][0]["slots"]["title"] == "新的封面标题"
 
     bad_patch = await client.patch(
         f"/api/decks/{deck_id}",

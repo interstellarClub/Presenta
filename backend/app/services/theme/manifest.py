@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,7 @@ from app.core.errors import ValidationFailedError
 from app.services.deck.layouts import LAYOUTS
 
 _MANIFEST_DIR = Path(__file__).resolve().parents[2] / "templates" / "themes"
+_THEME_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 _REQUIRED_TOKEN_GROUPS = {"color", "font", "space", "radius", "shadow"}
 _ALLOWED_CSS_PROPERTIES = {
@@ -39,6 +41,8 @@ def list_builtin_theme_ids() -> list[str]:
 
 
 def load_manifest(theme_id: str) -> dict[str, Any]:
+    if not _THEME_ID_RE.match(theme_id):
+        raise ValidationFailedError("invalid theme id")
     path = _MANIFEST_DIR / f"{theme_id}.json"
     if not path.exists():
         raise ValidationFailedError(f"unknown theme '{theme_id}'", details={"themes": list_builtin_theme_ids()})

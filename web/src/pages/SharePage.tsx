@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import SlideFrame from "@/canvas/SlideFrame";
+import { exportDeckMp4 } from "@/export/video";
 import { api, ApiError } from "@/lib/api";
 import type { DeckPayload, ThemeManifest } from "@/types";
 
@@ -60,6 +61,22 @@ export default function SharePage() {
     setDownloadError(null);
     setDownloadNote(null);
     try {
+      if (format === "mp4") {
+        const theme = themes.find((entry) => entry.id === unlocked?.deck.themeId);
+        if (!theme) throw new Error("没有可用于 MP4 导出的主题");
+        const blob = await exportDeckMp4(unlocked!.deck, theme, {
+          fps: 30,
+          secondsPerSlide: 2,
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `presenta-${slug}.mp4`;
+        link.click();
+        URL.revokeObjectURL(url);
+        setDownloadNote("MP4 已在本地逐帧编码，未上传到服务器。");
+        return;
+      }
       const payload = await api<DownloadPayload>(
         `/shares/guest/${slug}/downloads/${format}`,
         { method: "POST" },
@@ -158,6 +175,7 @@ export default function SharePage() {
             slide={slide}
             theme={themes.find((entry) => entry.id === deck.themeId) ?? null}
             documentId={deck.meta.sourceDocumentId ?? null}
+            motionLevel={deck.motionLevel}
             interactive={false}
             title={`share-${slide.id}`}
           />

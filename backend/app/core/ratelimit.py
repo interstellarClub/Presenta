@@ -35,13 +35,21 @@ class RedisRateLimiter:
         self.client = redis.from_url(url, decode_responses=True)
 
     async def allow(self, key: str, limit: int, window_s: int) -> bool:
+        import hashlib
+        import logging
+
         try:
             current = await self.client.incr(key)
             if current == 1:
                 await self.client.expire(key, window_s)
             return int(current) <= limit
         except Exception:
-            return True
+            fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+            logging.getLogger("presenta.ratelimit").error(
+                "redis rate limiter unavailable; failing closed for key_fingerprint=%s",
+                fingerprint,
+            )
+            return False
 
     async def reset(self, key: str) -> None:
         try:

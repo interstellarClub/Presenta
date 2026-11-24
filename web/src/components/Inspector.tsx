@@ -1,21 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { LAYOUT_SLOTS } from "@/canvas/layouts";
-import type { DeckPayload, Slide, SlideElement, ThemeManifest } from "@/types";
+import { api } from "@/lib/api";
+import type {
+  AssetSummary,
+  DeckPayload,
+  Slide,
+  SlideElement,
+  ThemeManifest,
+} from "@/types";
 
 export type PatchOp = Record<string, unknown>;
 
 interface InspectorProps {
+  deckId: string;
+  expectedSeq: number;
   deck: DeckPayload;
   slide: Slide;
   slideIndex: number;
   selectedSlot: string | null;
   theme: ThemeManifest | null;
   documentId: string | null;
+  assets: AssetSummary[];
   onPatch: (operations: PatchOp[]) => Promise<void> | void;
 }
 
-type TabKey = "content" | "style" | "motion" | "source";
+type TabKey = "content" | "style" | "motion" | "ai" | "source";
 
 function asText(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -29,12 +39,15 @@ function findElement(slide: Slide, slotPath: string): { element: SlideElement; i
 }
 
 export default function Inspector({
+  deckId,
+  expectedSeq,
   deck,
   slide,
   slideIndex,
   selectedSlot,
   theme,
   documentId,
+  assets,
   onPatch,
 }: InspectorProps) {
   const [tab, setTab] = useState<TabKey>("content");
@@ -44,6 +57,19 @@ export default function Inspector({
   const [fontSize, setFontSize] = useState("");
   const [color, setColor] = useState("");
   const [align, setAlign] = useState("");
+  const [fontWeight, setFontWeight] = useState("");
+  const [lineHeight, setLineHeight] = useState("");
+  const [letterSpacing, setLetterSpacing] = useState("");
+  const [padding, setPadding] = useState("");
+  const [borderRadius, setBorderRadius] = useState("");
+  const [opacity, setOpacity] = useState("");
+  const [background, setBackground] = useState("");
+  const [intentInstruction, setIntentInstruction] = useState("");
+  const [intentOperations, setIntentOperations] = useState<PatchOp[]>([]);
+  const [intentExplanation, setIntentExplanation] = useState("");
+  const [intentBusy, setIntentBusy] = useState(false);
+  const [componentName, setComponentName] = useState("StepReveal");
+  const [componentConfig, setComponentConfig] = useState("{}");
 
   const specs = useMemo(() => LAYOUT_SLOTS[slide.layout] ?? [], [slide.layout]);
   const activeSpec = useMemo(
@@ -91,7 +117,19 @@ export default function Inspector({
     setFontSize(asText(styleOverride.fontSize));
     setColor(asText(styleOverride.color));
     setAlign(asText(styleOverride.textAlign));
+    setFontWeight(asText(styleOverride.fontWeight));
+    setLineHeight(asText(styleOverride.lineHeight));
+    setLetterSpacing(asText(styleOverride.letterSpacing));
+    setPadding(asText(styleOverride.padding));
+    setBorderRadius(asText(styleOverride.borderRadius));
+    setOpacity(asText(styleOverride.opacity));
+    setBackground(asText(styleOverride.background));
   }, [styleOverride, selectedSlot]);
+
+  useEffect(() => {
+    setComponentName(found?.element.component?.name ?? "StepReveal");
+    setComponentConfig(JSON.stringify(found?.element.component?.config ?? {}, null, 2));
+  }, [found]);
 
   const commitText = async () => {
     if (!activeSpec || !selectedSlot) return;
@@ -128,6 +166,13 @@ export default function Inspector({
     if (fontSize.trim()) value.fontSize = `${Number(fontSize) || 0}px`;
     if (color.trim()) value.color = color.trim();
     if (align.trim()) value.textAlign = align.trim();
+    if (fontWeight.trim()) value.fontWeight = fontWeight.trim();
+    if (lineHeight.trim()) value.lineHeight = lineHeight.trim();
+    if (letterSpacing.trim()) value.letterSpacing = letterSpacing.trim();
+    if (padding.trim()) value.padding = padding.trim();
+    if (borderRadius.trim()) value.borderRadius = borderRadius.trim();
+    if (opacity.trim()) value.opacity = opacity.trim();
+    if (background.trim()) value.background = background.trim();
     if (Object.keys(value).length === 0) return;
     const ops: PatchOp[] = [];
     if (found) {
@@ -174,6 +219,21 @@ export default function Inspector({
     }
   };
 
+  const chooseImage = async (assetId: string) => {
+    if (!selectedSlot || !assetId) return;
+    try {
+      await onPatch([
+        {
+          op: "replace",
+          path: `/slides/${slideIndex}/slots/${selectedSlot}`,
+          value: { kind: "image", assetId, alt: "", fit: "cover" },
+        },
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "图片替换失败");
+    }
+  };
+
   const applyTransition = async (effect: string, duration: number) => {
     try {
       await onPatch([
@@ -188,10 +248,80 @@ export default function Inspector({
     }
   };
 
+  const previewIntent = async () => {
+    if (!intentInstruction.trim()) return;
+    setIntentBusy(true);
+    setError(null);
+    try {
+      const result = await api<{
+        operations: PatchOp[];
+        explanation: string;
+      }>(`/decks/${deckId}/intent`, {
+        method: "POST",
+        body: JSON.stringify({
+          instruction: intentInstruction.trim(),
+          expectedSeq,
+        }),
+      });
+      setIntentOperations(result.operations);
+      setIntentExplanation(result.explanation);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "自然语言编辑失败");
+    } finally {
+      setIntentBusy(false);
+    }
+  };
+
+  const applyIntent = async () => {
+    if (intentOperations.length === 0) return;
+    try {
+      await onPatch(intentOperations);
+      setIntentOperations([]);
+      setIntentExplanation("");
+      setIntentInstruction("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "应用 Patch 失败");
+    }
+  };
+
+  const applyComponent = async () => {
+    if (!selectedSlot) return;
+    try {
+      const config = JSON.parse(componentConfig) as Record<string, unknown>;
+      const value = {
+        ...(found?.element ?? {
+          id: `motion-${Date.now().toString(36)}`,
+          slotPath: selectedSlot,
+          styleOverride: {},
+          anim: [],
+          provenance: null,
+        }),
+        type: "component",
+        layout: found?.element.layout ?? { x: 2, y: 20, w: 8, h: 40 },
+        component: { name: componentName, config },
+      };
+      await onPatch([
+        found
+          ? {
+              op: "replace",
+              path: `/slides/${slideIndex}/elements/${found.index}`,
+              value,
+            }
+          : {
+              op: "add",
+              path: `/slides/${slideIndex}/elements/-`,
+              value,
+            },
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "动效组件提交失败");
+    }
+  };
+
   return (
     <aside className="inspector">
       <div className="tabs">
-        {(["content", "style", "motion", "source"] as TabKey[]).map((key) => (
+        {(["content", "style", "motion", "ai", "source"] as TabKey[]).map((key) => (
           <button
             key={key}
             type="button"
@@ -204,6 +334,8 @@ export default function Inspector({
                 ? "样式"
                 : key === "motion"
                   ? "动效"
+                  : key === "ai"
+                    ? "AI 编辑"
                   : "来源"}
           </button>
         ))}
@@ -224,7 +356,30 @@ export default function Inspector({
                 <span className="mono">{selectedSlot}</span>
               </div>
               {activeSpec ? (
-                activeSpec.kind === "items" ? (
+                activeSpec.kind === "media" ? (
+                  <div className="field-row">
+                    <label>{activeSpec.label}</label>
+                    <select
+                      value={
+                        typeof slotValue === "object" &&
+                        slotValue !== null &&
+                        "assetId" in slotValue
+                          ? String((slotValue as Record<string, unknown>).assetId ?? "")
+                          : ""
+                      }
+                      onChange={(event) => void chooseImage(event.target.value)}
+                    >
+                      <option value="">选择文档图片资产</option>
+                      {assets
+                        .filter((asset) => asset.kind === "image")
+                        .map((asset) => (
+                          <option key={asset.id} value={asset.id}>
+                            {String(asset.meta?.name ?? asset.id.slice(0, 8))}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                ) : activeSpec.kind === "items" ? (
                   <div className="field-row">
                     <label>{activeSpec.label}（JSON 数组）</label>
                     <textarea
@@ -292,6 +447,64 @@ export default function Inspector({
                   <option value="center">居中</option>
                   <option value="right">右对齐</option>
                 </select>
+              </div>
+              <div className="field-row">
+                <label>字重</label>
+                <select value={fontWeight} onChange={(event) => setFontWeight(event.target.value)}>
+                  <option value="">默认</option>
+                  <option value="400">常规</option>
+                  <option value="500">中等</option>
+                  <option value="600">半粗</option>
+                  <option value="700">粗体</option>
+                </select>
+              </div>
+              <div className="field-row">
+                <label>行高</label>
+                <input
+                  value={lineHeight}
+                  placeholder="1.5"
+                  onChange={(event) => setLineHeight(event.target.value)}
+                />
+              </div>
+              <div className="field-row">
+                <label>字距</label>
+                <input
+                  value={letterSpacing}
+                  placeholder="0"
+                  onChange={(event) => setLetterSpacing(event.target.value)}
+                />
+              </div>
+              <div className="field-row">
+                <label>内边距</label>
+                <input
+                  value={padding}
+                  placeholder="0"
+                  onChange={(event) => setPadding(event.target.value)}
+                />
+              </div>
+              <div className="field-row">
+                <label>圆角</label>
+                <input
+                  value={borderRadius}
+                  placeholder="0"
+                  onChange={(event) => setBorderRadius(event.target.value)}
+                />
+              </div>
+              <div className="field-row">
+                <label>不透明度</label>
+                <input
+                  value={opacity}
+                  placeholder="1"
+                  onChange={(event) => setOpacity(event.target.value)}
+                />
+              </div>
+              <div className="field-row">
+                <label>背景</label>
+                <input
+                  value={background}
+                  placeholder="transparent"
+                  onChange={(event) => setBackground(event.target.value)}
+                />
               </div>
               <div className="inline-actions">
                 <button type="button" onClick={() => void applyStyle()}>
@@ -370,8 +583,74 @@ export default function Inspector({
               }}
             />
           </div>
+          <div className="field-row">
+            <label>受控动效组件</label>
+            <select
+              value={componentName}
+              onChange={(event) => setComponentName(event.target.value)}
+              disabled={!selectedSlot}
+            >
+              <option value="StepReveal">StepReveal</option>
+              <option value="ChartReveal">ChartReveal</option>
+              <option value="FlowDiagram">FlowDiagram</option>
+              <option value="FormulaStep">FormulaStep</option>
+              <option value="CodeType">CodeType</option>
+              <option value="FlowParticles">FlowParticles</option>
+            </select>
+          </div>
+          <div className="field-row">
+            <label>组件配置 JSON</label>
+            <textarea
+              rows={6}
+              className="mono"
+              value={componentConfig}
+              disabled={!selectedSlot}
+              onChange={(event) => setComponentConfig(event.target.value)}
+            />
+            <button type="button" onClick={() => void applyComponent()} disabled={!selectedSlot}>
+              应用动效组件
+            </button>
+          </div>
           <div className="muted small">
-            动效参数受 motionLevel 统一缩放；播放器与非 0 强度场景在后续阶段启用 seek(t)。
+            动效参数受 motionLevel 统一缩放，统一通过纯函数 seek(t) 计算帧状态。
+          </div>
+        </div>
+      ) : null}
+
+      {tab === "ai" ? (
+        <div className="panel-stack">
+          <div className="field-row">
+            <label>自然语言指令</label>
+            <textarea
+              rows={4}
+              value={intentInstruction}
+              placeholder="例如：把这页标题改短，并强调关键数字"
+              onChange={(event) => setIntentInstruction(event.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => void previewIntent()}
+            disabled={intentBusy || !intentInstruction.trim()}
+          >
+            {intentBusy ? "生成 Patch 中…" : "生成 Patch 预览"}
+          </button>
+          {intentExplanation ? <div className="notice">{intentExplanation}</div> : null}
+          {intentOperations.length > 0 ? (
+            <>
+              <pre
+                className="mono small"
+                style={{ whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto" }}
+              >
+                {JSON.stringify(intentOperations, null, 2)}
+              </pre>
+              <button type="button" className="primary" onClick={() => void applyIntent()}>
+                确认应用 Patch
+              </button>
+            </>
+          ) : null}
+          <div className="muted small">
+            模型只生成可校验的 JSON Patch；确认前不会修改 Deck。
           </div>
         </div>
       ) : null}

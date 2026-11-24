@@ -17,6 +17,7 @@ class PatchSubmit(CamelModel):
     operations: list[dict[str, Any]] = Field(min_length=1, max_length=200)
     kind: Literal["autosave", "milestone"] = "autosave"
     label: str | None = Field(default=None, max_length=120)
+    expected_seq: int | None = Field(default=None, ge=0)
 
 
 class DeckResponse(CamelModel):
@@ -43,3 +44,14 @@ class RollbackRequest(CamelModel):
 class GenerateResponse(CamelModel):
     job_id: UUID
     version_seq: int
+
+
+class IntentRequest(CamelModel):
+    instruction: str = Field(min_length=2, max_length=1000)
+    expected_seq: int | None = Field(default=None, ge=0)
+
+
+class IntentResponse(CamelModel):
+    operations: list[dict[str, Any]]
+    explanation: str = ""
+    preview: dict[str, Any]

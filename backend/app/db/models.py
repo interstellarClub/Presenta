@@ -168,6 +168,7 @@ class DocAsset(Base, CreatedAtMixin):
 
     __table_args__ = (
         CheckConstraint("kind IN ('image','table','formula')", name="kind_allowed"),
+        UniqueConstraint("document_id", "sha256", name="uq_doc_assets_document_sha"),
     )
 
     document: Mapped[Document] = relationship(back_populates="assets")
@@ -270,7 +271,34 @@ class Share(Base, CreatedAtMixin):
     view_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (Index("ix_shares_expires", "expires_at"),)
+    __table_args__ = (
+        Index("ix_shares_expires", "expires_at"),
+        Index(
+            "ix_shares_active",
+            "deck_id",
+            "expires_at",
+            postgresql_where=text("revoked_at IS NULL"),
+            sqlite_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+
+class ShareToken(Base, CreatedAtMixin):
+    __tablename__ = "share_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    share_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("shares.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ip_hash: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (
+        Index("ix_share_tokens_share_expiry", "share_id", "expires_at"),
+    )
 
 
 class ShareAccessLog(Base, CreatedAtMixin):
@@ -357,6 +385,7 @@ class ExportArtifact(Base, CreatedAtMixin):
     options: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     degraded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     degraded_notes: Mapped[list[str] | None] = mapped_column(JSONType)
+    degraded_details: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -391,6 +420,11 @@ class UsageLedger(Base, CreatedAtMixin):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     success: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(64))
+    upstream_call_id: Mapped[str | None] = mapped_column(String(160), unique=True)
+
+    __table_args__ = (
+        Index("ix_usage_ledger_purpose_created", "purpose", "created_at"),
+    )
 
 
 class AuditLog(Base, CreatedAtMixin):

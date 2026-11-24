@@ -2,7 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 
 import JobProgress from "@/components/JobProgress";
 import { api, ApiError } from "@/lib/api";
-import type { ExportArtifact, JobView, ShareSummary } from "@/types";
+import { exportDeckMp4 } from "@/export/video";
+import type {
+  DeckResponse,
+  ExportArtifact,
+  JobView,
+  ShareSummary,
+  ThemeManifest,
+} from "@/types";
 
 interface ExportPanelProps {
   deckId: string;
@@ -25,8 +32,9 @@ export default function ExportPanel({ deckId, versionSeq }: ExportPanelProps) {
   const [shares, setShares] = useState<ShareSummary[]>([]);
   const [password, setPassword] = useState("");
   const [ttlHours, setTtlHours] = useState(72);
-  const [formats, setFormats] = useState<string[]>(["pdf", "html", "pptx", "gif"]);
+  const [formats, setFormats] = useState<string[]>(["pdf", "html", "pptx", "gif", "mp4"]);
   const [busy, setBusy] = useState(false);
+  const [videoProgress, setVideoProgress] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -51,9 +59,26 @@ export default function ExportPanel({ deckId, versionSeq }: ExportPanelProps) {
     setBusy(true);
     try {
       if (format === "mp4") {
-        setNotice(
-          "MP4 走客户端 WebCodecs 逐帧编码；当前构建尚未接入编码器，请使用 PDF / HTML / GIF。",
-        );
+        setVideoProgress(0);
+        const [deckResponse, themes] = await Promise.all([
+          api<DeckResponse>(`/decks/${deckId}`),
+          api<ThemeManifest[]>("/themes"),
+        ]);
+        const theme =
+          themes.find((entry) => entry.id === deckResponse.deck.themeId) ?? themes[0];
+        if (!theme) throw new Error("没有可用于 MP4 导出的主题");
+        const blob = await exportDeckMp4(deckResponse.deck, theme, {
+          fps: 30,
+          secondsPerSlide: 2,
+          onProgress: setVideoProgress,
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `presenta-${deckId}.mp4`;
+        link.click();
+        URL.revokeObjectURL(url);
+        setNotice("MP4 已完成 WebCodecs 逐帧编码。");
         return;
       }
       const payload = await api<{
@@ -73,6 +98,7 @@ export default function ExportPanel({ deckId, versionSeq }: ExportPanelProps) {
       setError(err instanceof ApiError ? err.message : "导出失败");
     } finally {
       setBusy(false);
+      setVideoProgress(null);
     }
   };
 
@@ -120,6 +146,15 @@ export default function ExportPanel({ deckId, versionSeq }: ExportPanelProps) {
     <div className="panel-stack">
       {error ? <div className="notice">{error}</div> : null}
       {notice ? <div className="notice">{notice}</div> : null}
+      {videoProgress !== null ? (
+        <div className="progress-line">
+          <span className="mono">MP4 逐帧编码</span>
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: `${Math.max(2, videoProgress)}%` }} />
+          </div>
+          <span className="mono">{videoProgress}%</span>
+        </div>
+      ) : null}
 
       <div>
         <h2 style={{ marginBottom: 8 }}>导出</h2>
@@ -166,6 +201,16 @@ export default function ExportPanel({ deckId, versionSeq }: ExportPanelProps) {
               {artifact.degradedNotes.length > 0 ? (
                 <span className="muted small">{artifact.degradedNotes.join("；")}</span>
               ) : null}
+              {artifact.degradedDetails.length > 0 ? (
+                <div className="muted small" style={{ marginTop: 4 }}>
+                  降级页面：
+                  {artifact.degradedDetails.map((detail) => (
+                    <span key={detail.slideId} className="chip warn" style={{ marginLeft: 6 }}>
+                      第 {detail.slideIndex + 1} 页 · {detail.reason}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ))
         )}
@@ -192,7 +237,7 @@ export default function ExportPanel({ deckId, versionSeq }: ExportPanelProps) {
                 onChange={(event) => setTtlHours(Number(event.target.value) || 72)}
               />
             </label>
-            {["pdf", "html", "pptx", "gif"].map((format) => (
+            {["pdf", "html", "pptx", "gif", "mp4"].map((format) => (
               <label key={format} className="muted small">
                 <input
                   type="checkbox"

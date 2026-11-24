@@ -155,6 +155,13 @@ export interface VersionSummary {
   createdAt: string;
 }
 
+export interface VersionDiff {
+  fromSeq: number;
+  toSeq: number;
+  count: number;
+  operations: Record<string, unknown>[];
+}
+
 export interface JobView {
   id: string;
   kind: string;
@@ -205,12 +212,19 @@ export interface ShareSummary {
   viewCount: number;
 }
 
+export interface DegradedDetail {
+  slideId: string;
+  slideIndex: number;
+  reason: string;
+}
+
 export interface ExportArtifact {
   id: string;
   format: string;
   bytes: number;
   degraded: boolean;
   degradedNotes: string[];
+  degradedDetails: DegradedDetail[];
   downloadUrl: string;
   expiresAt: string;
 }

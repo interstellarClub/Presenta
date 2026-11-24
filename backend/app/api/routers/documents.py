@@ -1,4 +1,5 @@
 import json
+import zipfile
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
@@ -36,6 +37,31 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 _ALLOWED_SUFFIXES = {".docx", ".md", ".markdown"}
 _MARKDOWN_SUFFIXES = {".md", ".markdown"}
+_ALLOWED_MIME = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/octet-stream",
+    "text/markdown",
+    "text/plain",
+}
+
+
+def _validate_docx_zip(blob: bytes) -> None:
+    try:
+        with zipfile.ZipFile(__import__("io").BytesIO(blob)) as archive:
+            infos = archive.infolist()
+    except zipfile.BadZipFile as exc:
+        raise ValidationFailedError(f"docx 包损坏：{exc}") from exc
+    total_uncompressed = sum(info.file_size for info in infos)
+    if total_uncompressed > settings.max_docx_uncompressed_bytes:
+        raise PayloadTooLargeError(
+            f"docx 展开后超过 {settings.max_docx_uncompressed_mb}MB 上限"
+        )
+    compressed = sum(info.compress_size for info in infos) or 1
+    ratio = total_uncompressed / compressed
+    if ratio > settings.max_docx_compression_ratio:
+        raise ValidationFailedError(
+            f"docx 压缩比 {ratio:.1f} 超过 {settings.max_docx_compression_ratio} 上限，疑似 zip 炸弹"
+        )
 
 
 async def _owned_document(session: SessionDep, document_id: UUID, user_id: UUID) -> Document:
@@ -142,6 +168,10 @@ async def upload_document(
     if suffix not in _ALLOWED_SUFFIXES:
         raise ValidationFailedError("仅支持 .docx / .md / .markdown 文件")
 
+    declared_mime = (file.content_type or "").lower()
+    if declared_mime and declared_mime not in _ALLOWED_MIME:
+        raise ValidationFailedError(f"不支持的 MIME 类型：{declared_mime}")
+
     chunks: list[bytes] = []
     total = 0
     while True:
@@ -156,8 +186,10 @@ async def upload_document(
     if not blob:
         raise ValidationFailedError("文件为空")
 
-    if suffix == ".docx" and not blob.startswith(b"PK\x03\x04"):
-        raise ValidationFailedError("文件不是有效的 .docx 包")
+    if suffix == ".docx":
+        if not blob.startswith(b"PK\x03\x04"):
+            raise ValidationFailedError("文件不是有效的 .docx 包")
+        _validate_docx_zip(blob)
 
     source_type = "editor_md" if suffix in _MARKDOWN_SUFFIXES else "upload_docx"
     key = safe_key(f"documents/{user.id}/originals", suffix.lstrip("."))
@@ -197,7 +229,8 @@ async def upload_document(
         meta={"bytes": total, "sourceType": source_type},
     )
     if job is not None:
-        await enqueue_job(job.id)
+        await session.commit()
+        await enqueue_job(job.id, kind=job.kind)
     return DocumentCreated(document=_summary(document), job_id=job.id if job else None)
 
 
@@ -236,7 +269,8 @@ async def create_from_editor(
         target_id=str(document.id),
         request=request,
     )
-    await enqueue_job(job.id)
+    await session.commit()
+    await enqueue_job(job.id, kind=job.kind)
     return DocumentCreated(document=_summary(document), job_id=job.id)
 
 
@@ -303,7 +337,8 @@ async def update_markdown(
         target_id=str(document.id),
         request=request,
     )
-    await enqueue_job(job.id)
+    await session.commit()
+    await enqueue_job(job.id, kind=job.kind)
     return DocumentCreated(document=_summary(document), job_id=job.id)
 
 
@@ -363,11 +398,26 @@ async def get_asset(
     except ValueError as exc:
         raise ValidationFailedError("assetId 非法") from exc
     asset = await session.get(DocAsset, parsed)
+    storage_key = asset.storage_key if asset is not None else None
+    if asset is None or asset.document_id != document.id:
+        assets = (
+            await session.scalars(
+                select(DocAsset).where(
+                    DocAsset.document_id == document.id, DocAsset.kind == "image"
+                )
+            )
+        ).all()
+        for candidate in assets:
+            aliases = (candidate.meta or {}).get("aliases")
+            if isinstance(aliases, dict) and asset_id in aliases:
+                asset = candidate
+                storage_key = aliases[asset_id]
+                break
     if asset is None or asset.document_id != document.id:
         raise NotFoundError("资产不存在")
-    if not asset.storage_key or asset.kind != "image":
+    if not storage_key or asset.kind != "image":
         raise ValidationFailedError("该资产没有可下载内容")
-    data = await storage.get_bytes(asset.storage_key)
+    data = await storage.get_bytes(str(storage_key))
     return Response(
         content=data,
         media_type=asset.mime or "application/octet-stream",

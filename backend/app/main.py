@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app.api.routers import auth, decks, documents, exports, jobs, shares, themes
 from app.core.config import settings
 from app.core.errors import AppError
+from app.core.metrics import snapshot as metrics_snapshot
 from app.db.session import SessionFactory, dispose_engine, engine, ensure_schema
 from app.services.theme.seed import seed_builtin_themes
 
@@ -28,6 +29,17 @@ SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    if settings.llm_provider == "deepseek" and not settings.deepseek_api_key_configured:
+        raise RuntimeError(
+            "LLM_PROVIDER=deepseek requires DEEPSEEK_API_KEY; refusing to start without a real key"
+        )
+    if settings.app_env == "prod":
+        if settings.secret_key.startswith("dev-insecure"):
+            raise RuntimeError("refusing to start in prod with the development SECRET_KEY")
+        if not settings.session_cookie_secure:
+            raise RuntimeError("refusing to start in prod with insecure session cookie")
+        if settings.llm_provider == "mock" and not settings.allow_mock_in_prod:
+            raise RuntimeError("refusing to start in prod with mock LLM provider")
     settings.local_storage_dir.mkdir(parents=True, exist_ok=True)
     if settings.uses_sqlite or settings.app_env != "prod":
         await ensure_schema()
@@ -39,12 +51,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             await session.rollback()
             logger.warning("theme seeding skipped: %s", exc)
     logger.info(
-        "presenta api ready env=%s db=%s queue=%s storage=%s llm=%s",
+        "presenta api ready env=%s db=%s queue=%s storage=%s llm=%s model=%s key_configured=%s",
         settings.app_env,
         "sqlite" if settings.uses_sqlite else "postgres",
         settings.queue_backend,
         settings.storage_backend,
         settings.llm_provider,
+        settings.deepseek_model if settings.llm_provider == "deepseek" else "mock",
+        settings.deepseek_api_key_configured,
     )
     if settings.llm_provider == "mock":
         logger.warning("LLM provider is 'mock' - generation output is deterministic dev data")
@@ -137,7 +151,10 @@ async def health() -> dict[str, Any]:
         "queue": settings.queue_backend,
         "storage": settings.storage_backend,
         "llm": settings.llm_provider,
+        "model": settings.deepseek_model if settings.llm_provider == "deepseek" else "mock",
+        "deepseek_api_key_configured": settings.deepseek_api_key_configured,
         "env": settings.app_env,
+        "metrics": metrics_snapshot(),
     }
 
 

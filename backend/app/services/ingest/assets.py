@@ -39,6 +39,7 @@ async def store_image(
     digest = sha256_bytes(blob)
     existing = await _existing_asset(session, document_id, digest)
     if existing is not None:
+        existing.ref_count = int(existing.ref_count or 0) + 1
         if existing.storage_key and not existing.storage_key.endswith(asset_id):
             stored = await storage.put_bytes(
                 f"documents/{document_id}/assets/{asset_id}.{_suffix_for(mime, name)}",
@@ -48,6 +49,7 @@ async def store_image(
             aliases = dict((existing.meta or {}).get("aliases") or {})
             aliases[asset_id] = stored
             existing.meta = {**(existing.meta or {}), "aliases": aliases}
+        await session.flush()
         return existing
 
     key = f"documents/{document_id}/assets/{asset_id}.{_suffix_for(mime, name)}"
@@ -62,6 +64,7 @@ async def store_image(
         size_bytes=len(blob),
         source_ref=source_ref,
         meta={"name": name},
+        ref_count=1,
     )
     session.add(asset)
     await session.flush()
@@ -82,6 +85,8 @@ async def store_table(
     digest = sha256_bytes((csv_text or repr(payload)).encode("utf-8"))
     existing = await _existing_asset(session, document_id, digest)
     if existing is not None:
+        existing.ref_count = int(existing.ref_count or 0) + 1
+        await session.flush()
         return existing
     key = f"documents/{document_id}/assets/{asset_id}.csv"
     if csv_text:
@@ -96,6 +101,7 @@ async def store_table(
         size_bytes=len(csv_text.encode("utf-8")),
         source_ref=source_ref,
         meta=payload,
+        ref_count=1,
     )
     session.add(asset)
     await session.flush()
@@ -114,6 +120,8 @@ async def store_formula(
     digest = sha256_bytes((latex or original_xml).encode("utf-8"))
     existing = await _existing_asset(session, document_id, digest)
     if existing is not None:
+        existing.ref_count = int(existing.ref_count or 0) + 1
+        await session.flush()
         return existing
     asset = DocAsset(
         id=UUID(hex=asset_id),
@@ -125,6 +133,7 @@ async def store_formula(
         size_bytes=len((latex or "").encode("utf-8")),
         source_ref=source_ref,
         meta={"latex": latex, "originalXml": original_xml},
+        ref_count=1,
     )
     session.add(asset)
     await session.flush()

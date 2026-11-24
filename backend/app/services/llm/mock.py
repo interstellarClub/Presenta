@@ -103,7 +103,16 @@ def build_page_payload(context: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_intent_payload(context: dict[str, Any]) -> dict[str, Any]:
-    return {"patch": list(context.get("candidate_patch") or [])}
+    operations = list(context.get("candidate_patch") or [])
+    if not operations:
+        operations = [
+            {
+                "op": "replace",
+                "path": "/motionLevel",
+                "value": float(context.get("current_motion_level") or 0.0),
+            }
+        ]
+    return {"operations": operations, "explanation": "mock provider 未执行真实语义编辑"}
 
 
 def build_payload(purpose: str, context: dict[str, Any]) -> dict[str, Any]:

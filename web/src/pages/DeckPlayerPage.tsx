@@ -102,8 +102,10 @@ export default function DeckPlayerPage() {
           slide={slide}
           theme={theme}
           documentId={documentId}
+          motionLevel={deck.motionLevel}
           interactive={false}
           title={`player-${slide.id}`}
+          step={maxStep > 0 ? step : undefined}
         />
 
         {notesVisible ? (

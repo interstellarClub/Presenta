@@ -1,6 +1,7 @@
 import Editor from "@monaco-editor/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import type { editor } from "monaco-editor";
 
 import { api, ApiError, streamSse } from "@/lib/api";
 import type {
@@ -31,6 +32,8 @@ export default function DocumentPage() {
   const [streaming, setStreaming] = useState(false);
   const [streamLog, setStreamLog] = useState<string>("");
   const abortRef = useRef<AbortController | null>(null);
+  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const draggedOutlineIndex = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -134,6 +137,41 @@ export default function DocumentPage() {
     setOutline({ ...outline, items: outline.items.filter((_, itemIndex) => itemIndex !== index) });
   };
 
+  const addItem = () => {
+    if (!outline) return;
+    const id = `item-${Date.now().toString(36)}`;
+    const sectionId = sections[0]?.id ?? null;
+    setOutline({
+      ...outline,
+      items: [
+        ...outline.items,
+        {
+          id,
+          title: "新页面",
+          points: ["请补充本页要点"],
+          sectionId,
+        },
+      ],
+    });
+  };
+
+  const moveItem = (from: number, to: number) => {
+    if (!outline || from === to) return;
+    const items = [...outline.items];
+    const [moved] = items.splice(from, 1);
+    items.splice(to, 0, moved);
+    setOutline({ ...outline, items });
+  };
+
+  const revealSection = (sectionId: string | null | undefined) => {
+    const section = sections.find((entry) => entry.id === sectionId);
+    const instance = editorRef.current;
+    if (!section || !instance) return;
+    instance.revealLineInCenter(section.lineStart);
+    instance.setPosition({ lineNumber: section.lineStart, column: 1 });
+    instance.focus();
+  };
+
   const confirmAndCreate = async () => {
     if (!outline || outline.items.length === 0) {
       setError("大纲为空，无法创建演示文稿");
@@ -233,6 +271,9 @@ export default function DocumentPage() {
               theme="vs-dark"
               value={markdown}
               onChange={(value) => setMarkdown(value ?? "")}
+              onMount={(instance) => {
+                editorRef.current = instance;
+              }}
               options={{
                 minimap: { enabled: false },
                 wordWrap: "on",
@@ -247,11 +288,17 @@ export default function DocumentPage() {
             <h2>章节定位</h2>
             <div className="outline-list">
               {sections.map((section) => (
-                <div key={section.id} className="version-row">
+                <button
+                  key={section.id}
+                  type="button"
+                  className="version-row"
+                  onClick={() => revealSection(section.id)}
+                  style={{ width: "100%", textAlign: "left", border: 0, background: "transparent", cursor: "pointer" }}
+                >
                   <span className="mono">L{section.lineStart}</span>
                   <span style={{ flex: 1 }}>{section.title}</span>
                   <span className="muted small mono">h{section.level}</span>
-                </div>
+                </button>
               ))}
               {sections.length === 0 ? <div className="muted small">暂无章节</div> : null}
             </div>
@@ -291,10 +338,44 @@ export default function DocumentPage() {
               </div>
               <div className="outline-list">
                 {outline.items.map((item, index) => (
-                  <div key={item.id || index} className="outline-item">
+                  <div
+                    key={item.id || index}
+                    className="outline-item"
+                    draggable
+                    onDragStart={() => {
+                      draggedOutlineIndex.current = index;
+                    }}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const from = draggedOutlineIndex.current;
+                      if (from !== null) moveItem(from, index);
+                      draggedOutlineIndex.current = null;
+                    }}
+                  >
                     <div className="doc-meta">
                       <span className="mono">#{index + 1}</span>
-                      <span className="muted small">{item.sectionId ?? "未绑定章节"}</span>
+                      <select
+                        className="small"
+                        value={item.sectionId ?? ""}
+                        onChange={(event) =>
+                          updateItem(index, { sectionId: event.target.value || null })
+                        }
+                      >
+                        <option value="">未绑定章节</option>
+                        {sections.map((section) => (
+                          <option key={section.id} value={section.id}>
+                            {section.title}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => revealSection(item.sectionId)}
+                      >
+                        原文
+                      </button>
                       <button
                         type="button"
                         className="ghost small"
@@ -328,6 +409,9 @@ export default function DocumentPage() {
                   </div>
                 ))}
               </div>
+              <button type="button" className="ghost" onClick={addItem}>
+                新增页面
+              </button>
               <button type="button" onClick={() => void confirmAndCreate()} disabled={busy}>
                 确认大纲并创建
               </button>

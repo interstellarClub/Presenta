@@ -116,3 +116,16 @@ export async function uploadDocument(file: File, title?: string): Promise<unknow
   if (!response.ok) throw await parseError(response);
   return response.json();
 }
+
+export async function uploadThemePack(file: File, name: string): Promise<unknown> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("name", name);
+  const response = await fetch(`${API_PREFIX}/themes`, {
+    method: "POST",
+    body: form,
+    credentials: "include",
+  });
+  if (!response.ok) throw await parseError(response);
+  return response.json();
+}

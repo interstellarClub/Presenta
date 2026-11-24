@@ -92,7 +92,11 @@ class ComponentSpec(CamelModel):
 class Element(CamelModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12], max_length=32)
     type: ElementType
-    slot_path: str = Field(min_length=1, max_length=64)
+    slot_path: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_.\[\]-]+$",
+    )
     layout: ElementLayout | None = None
     style_override: dict[str, str | int | float] = Field(default_factory=dict)
     anim: list[AnimSpec] = Field(default_factory=list)
@@ -118,6 +122,15 @@ class Element(CamelModel):
         unknown = set(value) - allowed
         if unknown:
             raise ValueError(f"styleOverride keys not allowed: {sorted(unknown)}")
+        for key, raw in value.items():
+            text = str(raw)
+            if any(ch in text for ch in ('"', "'", "<", ">", "\\", ";", "{", "}", "`")):
+                raise ValueError(f"styleOverride[{key}] contains forbidden character")
+            lowered = text.lower()
+            if "url(" in lowered or "expression(" in lowered or "javascript:" in lowered:
+                raise ValueError(f"styleOverride[{key}] contains forbidden function")
+            if len(text) > 200:
+                raise ValueError(f"styleOverride[{key}] value too long")
         return value
 
 
@@ -175,6 +188,7 @@ Media = Annotated[ImageMedia | ChartMedia | TableMedia, Field(discriminator="kin
 class NumberItem(CamelModel):
     value: str = Field(min_length=1, max_length=6)
     label: str = Field(min_length=1, max_length=24)
+    unit: str = Field(default="", max_length=16)
 
 
 class CardItem(CamelModel):
@@ -221,7 +235,7 @@ class DeckMeta(CamelModel):
 
 
 class Deck(CamelModel):
-    schema_version: int = 1
+    schema_version: int = 2
     id: str = Field(default_factory=lambda: uuid.uuid4().hex, max_length=32)
     theme_id: str = Field(default="academic", max_length=64)
     motion_level: float = Field(default=0.0, ge=0.0, le=1.0)

@@ -9,14 +9,16 @@ from app.services.deck.versioning import validate_operations
 from app.services.pages.validator import validate_quotes_and_numbers
 
 DOC_ID = uuid.uuid4()
-SOURCE_TEXT = "原文第 3 页表 1：2023 年收入 12.4 亿元，同比增长 8.5%。"
+SOURCE_QUOTE = "原文第 3 页表 1：2023 年收入 12.4 亿元，同比增长 8.5%。"
+SOURCE_TEXT = "第一行\n第二行\n" + SOURCE_QUOTE
 
 
-def _provenance(quote: str = SOURCE_TEXT) -> Provenance:
+def _provenance(quote: str = SOURCE_QUOTE) -> Provenance:
     return Provenance(
-        type="original",
+        type="derived",
+        original_data={"columns": ["label", "value"], "rows": [["2023", 12.4]]},
         documentId=str(DOC_ID),
-        sourceRef=SourceRef(lineStart=3, colStart=0, lineEnd=3, colEnd=40),
+        sourceRef=SourceRef(lineStart=3, colStart=0, lineEnd=3, colEnd=len(SOURCE_QUOTE)),
         quote=quote,
     )
 
@@ -105,7 +107,7 @@ def test_quote_must_be_verbatim() -> None:
         provenance=[_provenance(quote="这句原文里没有")],
     )
     issues = validate_quotes_and_numbers(slide, SOURCE_TEXT)
-    assert any("逐字" in issue for issue in issues)
+    assert any("引用文本" in issue for issue in issues)
 
 
 def test_deck_hash_and_meta() -> None:
@@ -121,3 +123,57 @@ def test_patch_rejects_layout_and_id_mutation() -> None:
     with pytest.raises(ValidationFailedError):
         validate_operations([{"op": "replace", "path": "/slides/0/id", "value": "x"}])
     validate_operations([{"op": "replace", "path": "/motionLevel", "value": 0.4}])
+
+def test_style_override_rejects_quote_injection() -> None:
+    from app.api.schemas.deck import Element
+
+    with pytest.raises(ValidationError):
+        Element(
+            type="text",
+            slot_path="title",
+            style_override={"color": 'red"><img src=x onerror=alert(1)>'},
+        )
+
+
+def test_style_override_rejects_url_function() -> None:
+    from app.api.schemas.deck import Element
+
+    with pytest.raises(ValidationError):
+        Element(
+            type="text",
+            slot_path="title",
+            style_override={"background": "url(javascript:alert(1))"},
+        )
+
+
+def test_style_override_rejects_semicolon_injection() -> None:
+    from app.api.schemas.deck import Element
+
+    with pytest.raises(ValidationError):
+        Element(
+            type="text",
+            slot_path="title",
+            style_override={"color": "red;position:fixed"},
+        )
+
+
+def test_style_override_rejects_unknown_key() -> None:
+    from app.api.schemas.deck import Element
+
+    with pytest.raises(ValidationError):
+        Element(
+            type="text",
+            slot_path="title",
+            style_override={"evil": "red"},
+        )
+
+
+def test_style_override_accepts_safe_value() -> None:
+    from app.api.schemas.deck import Element
+
+    element = Element(
+        type="text",
+        slot_path="title",
+        style_override={"color": "#1F4E79", "fontSize": 24, "fontWeight": "bold"},
+    )
+    assert element.style_override["color"] == "#1F4E79"

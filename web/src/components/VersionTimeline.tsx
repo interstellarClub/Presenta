@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
-import type { VersionSummary } from "@/types";
+import type { VersionDiff, VersionSummary } from "@/types";
 
 interface VersionTimelineProps {
   deckId: string;
@@ -19,6 +19,7 @@ export default function VersionTimeline({ deckId, currentSeq, onRolledBack }: Ve
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [diff, setDiff] = useState<VersionDiff | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -52,9 +53,42 @@ export default function VersionTimeline({ deckId, currentSeq, onRolledBack }: Ve
     }
   };
 
+  const compare = async (seq: number) => {
+    setError(null);
+    try {
+      const result = await api<VersionDiff>(
+        `/decks/${deckId}/diff?fromSeq=${seq}&toSeq=${currentSeq}`,
+      );
+      setDiff(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "版本对比失败");
+    }
+  };
+
   return (
     <div className="panel-stack">
       {error ? <div className="notice">{error}</div> : null}
+      {diff ? (
+        <div className="notice" style={{ maxHeight: 220, overflow: "auto" }}>
+          <div className="doc-meta">
+            <strong>
+              v{diff.fromSeq} → v{diff.toSeq}
+            </strong>
+            <span className="muted small">{diff.count} 处变化</span>
+            <button
+              type="button"
+              className="ghost small"
+              style={{ marginLeft: "auto" }}
+              onClick={() => setDiff(null)}
+            >
+              关闭
+            </button>
+          </div>
+          <pre className="mono small" style={{ whiteSpace: "pre-wrap" }}>
+            {JSON.stringify(diff.operations.slice(0, 30), null, 2)}
+          </pre>
+        </div>
+      ) : null}
       {versions.length === 0 ? <div className="muted small">暂无版本</div> : null}
       {versions.map((version) => (
         <div
@@ -71,10 +105,19 @@ export default function VersionTimeline({ deckId, currentSeq, onRolledBack }: Ve
           <button
             type="button"
             className="ghost small"
-            disabled={pending || version.seq === currentSeq}
+            disabled={pending || version.seq === currentSeq || version.seq === 1}
             onClick={() => void rollback(version.seq)}
+            title={version.seq === 1 ? "初始版本尚未生成页面，不能回退" : undefined}
           >
             回退
+          </button>
+          <button
+            type="button"
+            className="ghost small"
+            disabled={version.seq === currentSeq}
+            onClick={() => void compare(version.seq)}
+          >
+            对比
           </button>
         </div>
       ))}

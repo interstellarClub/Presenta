@@ -22,6 +22,11 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   minio:
     image: minio/minio:latest
@@ -34,6 +39,24 @@ services:
       - "9001:9001"
     volumes:
       - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/presenta &&
+      mc anonymous set none local/presenta &&
+      echo 'minio bucket presenta ready'
+      "
 
   render-svc:
     build:
@@ -44,6 +67,11 @@ services:
     ports:
       - "8100:8100"
     shm_size: "1gb"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
   api:
     build:
@@ -62,9 +90,9 @@ services:
       S3_BUCKET: presenta
       S3_KEY: minioadmin
       S3_SECRET: minioadmin
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required for real LLM acceptance}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
       RENDER_SVC_URL: http://render-svc:8100
       RENDER_SVC_TOKEN: ${RENDER_SVC_TOKEN:-dev-render-token}
       WEB_ORIGIN: http://localhost:5173
@@ -74,9 +102,18 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      render-svc:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
     volumes:
       - ../backend:/app
 
@@ -97,16 +134,33 @@ services:
       S3_BUCKET: presenta
       S3_KEY: minioadmin
       S3_SECRET: minioadmin
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required for real LLM acceptance}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
       RENDER_SVC_URL: http://render-svc:8100
       RENDER_SVC_TOKEN: ${RENDER_SVC_TOKEN:-dev-render-token}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      render-svc:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,redis; redis.Redis.from_url(os.environ['REDIS_URL']).ping()",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
     volumes:
       - ../backend:/app
 
@@ -117,7 +171,8 @@ services:
     ports:
       - "5173:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

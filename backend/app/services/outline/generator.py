@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.outline import Outline, OutlineItem
+from app.core.config import settings
 from app.core.errors import ValidationFailedError
 from app.db.models import Document
 from app.services.ingest.markdown import sections_for_outline
@@ -17,7 +18,7 @@ MAX_PROMPT_SECTIONS = 60
 
 def outline_context(document: Document) -> dict[str, Any]:
     ast = document.ast or {}
-    sections = sections_for_outline(ast)[:MAX_PROMPT_SECTIONS]
+    sections = sections_for_outline(ast)[: settings.max_outline_sections]
     return {
         "documentTitle": document.title,
         "sections": [
@@ -60,6 +61,10 @@ def _sanitize(outline: Outline, known_ids: set[str]) -> Outline:
         )
     if not items:
         raise ValidationFailedError("outline produced no items")
+    if len(items) > settings.max_deck_pages:
+        raise ValidationFailedError(
+            f"大纲生成 {len(items)} 页超过上限 {settings.max_deck_pages}，请精简文档或调高 max_deck_pages"
+        )
     payload = outline.model_dump()
     payload["items"] = [item.model_dump() for item in items]
     return Outline.model_validate(payload)

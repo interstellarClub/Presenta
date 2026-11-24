@@ -65,7 +65,17 @@ def fake_render(monkeypatch: pytest.MonkeyPatch) -> None:
             notes=["fake render"],
         )
 
-    async def fake_gif(*, slides_html, theme_css, fps=15, seconds=8, max_width=1280):
+    async def fake_gif(
+        *,
+        slides_html,
+        theme_css,
+        fps=15,
+        seconds=8,
+        max_width=1280,
+        frame_times=None,
+        dark_theme=False,
+        slide_steps=None,
+    ):
         assert slides_html
         return RenderResult(
             content=b"GIF89a-fake",
